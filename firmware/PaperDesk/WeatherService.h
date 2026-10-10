@@ -41,13 +41,20 @@ class WeatherService {
   void begin();
   void update(bool connected);
   bool setCity(const String& city);
+  bool setCoordinates(float latitude, float longitude, const String& label,
+                      const String& source = "phone");
+  bool autoLocateFromIp();
   void requestRefresh();
   bool consumeChanged();
 
   const WeatherSnapshot& snapshot() const { return snapshot_; }
+  const String& locationSource() const { return locationSource_; }
+  float latitude() const { return latitude_; }
+  float longitude() const { return longitude_; }
 
  private:
   bool geocode();
+  bool reverseGeocode(float latitude, float longitude, String& city);
   bool fetchForecast();
   bool httpGet(const String& url, String& response);
   void saveLocation();
@@ -68,6 +75,7 @@ class WeatherService {
   WeatherSnapshot snapshot_;
   float latitude_ = 0.0f;
   float longitude_ = 0.0f;
+  String locationSource_;
   bool hasLocation_ = false;
   bool refreshRequested_ = true;
   bool changed_ = false;

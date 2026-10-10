@@ -97,6 +97,9 @@ void WifiPortal::configureRoutes() {
   server_.on("/api/mode", HTTP_POST, [this] { handleMode(); });
   server_.on("/api/badge", HTTP_POST, [this] { handleBadge(); });
   server_.on("/api/weather", HTTP_POST, [this] { handleWeather(); });
+  server_.on("/api/weather/location", HTTP_POST, [this] { handleWeatherLocation(); });
+  server_.on("/api/weather/auto-location", HTTP_POST,
+             [this] { handleWeatherAutoLocation(); });
   server_.on("/api/device/lock", HTTP_POST, [this] { handleDeviceLock(); });
   server_.on("/api/device/restart", HTTP_POST, [this] { handleDeviceRestart(); });
   server_.on("/api/device/power-off", HTTP_POST, [this] { handleDevicePowerOff(); });
@@ -407,6 +410,12 @@ void WifiPortal::handleApp() {
     body += jsonEscape(weather.resolvedCity);
     body += F("\",\"valid\":");
     body += weather.valid ? F("true") : F("false");
+    body += F(",\"locationSource\":\"");
+    body += jsonEscape(weatherService_->locationSource());
+    body += F("\",\"latitude\":");
+    body += String(weatherService_->latitude(), 6);
+    body += F(",\"longitude\":");
+    body += String(weatherService_->longitude(), 6);
     body += F(",\"error\":\"");
     body += jsonEscape(weather.error);
     body += F("\"");
@@ -447,6 +456,46 @@ void WifiPortal::handleWeather() {
   }
   contentChanged_ = true;
   server_.send(200, "application/json", "{\"ok\":true}");
+}
+
+void WifiPortal::handleWeatherLocation() {
+  if (!requireAuthorized()) return;
+  if (!weatherService_ || !server_.hasArg("latitude") || !server_.hasArg("longitude")) {
+    server_.send(400, "text/plain; charset=utf-8", "缺少定位坐标。");
+    return;
+  }
+  const String latitudeText = server_.arg("latitude");
+  const String longitudeText = server_.arg("longitude");
+  char* latitudeEnd = nullptr;
+  char* longitudeEnd = nullptr;
+  const float latitude = strtof(latitudeText.c_str(), &latitudeEnd);
+  const float longitude = strtof(longitudeText.c_str(), &longitudeEnd);
+  if (latitudeEnd == latitudeText.c_str() || *latitudeEnd != '\0' ||
+      longitudeEnd == longitudeText.c_str() || *longitudeEnd != '\0' ||
+      !weatherService_->setCoordinates(latitude, longitude, server_.arg("label"), "phone")) {
+    server_.send(400, "text/plain; charset=utf-8", "定位坐标无效。");
+    return;
+  }
+  contentChanged_ = true;
+  String body = F("{\"ok\":true,\"city\":\"");
+  body += jsonEscape(weatherService_->snapshot().resolvedCity);
+  body += F("\"}");
+  server_.send(200, "application/json; charset=utf-8", body);
+}
+
+void WifiPortal::handleWeatherAutoLocation() {
+  if (!requireAuthorized()) return;
+  if (!weatherService_ || !weatherService_->autoLocateFromIp()) {
+    const String error = weatherService_ ? weatherService_->snapshot().error
+                                         : String(F("天气服务不可用"));
+    server_.send(502, "text/plain; charset=utf-8", error);
+    return;
+  }
+  contentChanged_ = true;
+  String body = F("{\"ok\":true,\"city\":\"");
+  body += jsonEscape(weatherService_->snapshot().resolvedCity);
+  body += F("\"}");
+  server_.send(200, "application/json; charset=utf-8", body);
 }
 
 void WifiPortal::handleDeviceLock() {

@@ -12,6 +12,7 @@ namespace {
 constexpr char kWeatherPreferences[] = "paperdesk_wx";
 constexpr uint32_t kWeatherRefreshMs = 30UL * 60UL * 1000UL;
 constexpr uint32_t kWeatherRetryMs = 5UL * 60UL * 1000UL;
+constexpr uint32_t kLocationRetryMs = 30UL * 60UL * 1000UL;
 
 }  // namespace
 
@@ -22,13 +23,19 @@ void WeatherService::begin() {
   latitude_ = preferences_.getFloat("lat", 0.0f);
   longitude_ = preferences_.getFloat("lon", 0.0f);
   hasLocation_ = preferences_.getBool("located", false);
+  locationSource_ = preferences_.getString("source", snapshot_.city.isEmpty() ? "" : "manual");
   preferences_.end();
   refreshRequested_ = !snapshot_.city.isEmpty();
 }
 
 void WeatherService::update(bool connected) {
-  if (!connected || snapshot_.city.isEmpty()) return;
+  if (!connected) return;
   const uint32_t nowMs = millis();
+  if (snapshot_.city.isEmpty()) {
+    if (lastAttemptMs_ != 0 && nowMs - lastAttemptMs_ < kLocationRetryMs) return;
+    lastAttemptMs_ = nowMs;
+    if (!autoLocateFromIp()) return;
+  }
   const uint32_t interval = snapshot_.valid ? kWeatherRefreshMs : kWeatherRetryMs;
   if (!refreshRequested_ && lastAttemptMs_ != 0 && nowMs - lastAttemptMs_ < interval) return;
 
@@ -55,12 +62,61 @@ bool WeatherService::setCity(const String& cityValue) {
   snapshot_.valid = false;
   snapshot_.error = "";
   hasLocation_ = false;
+  locationSource_ = city.isEmpty() ? "" : "manual";
   latitude_ = 0.0f;
   longitude_ = 0.0f;
   saveLocation();
   refreshRequested_ = !city.isEmpty();
   changed_ = true;
   return true;
+}
+
+bool WeatherService::setCoordinates(float latitude, float longitude, const String& labelValue,
+                                    const String& source) {
+  if (!isfinite(latitude) || !isfinite(longitude) || latitude < -90.0f || latitude > 90.0f ||
+      longitude < -180.0f || longitude > 180.0f) return false;
+
+  String label = labelValue;
+  label.trim();
+  if (label.length() > 64) return false;
+  if (label.isEmpty()) reverseGeocode(latitude, longitude, label);
+  if (label.isEmpty()) label = F("当前位置");
+
+  latitude_ = latitude;
+  longitude_ = longitude;
+  hasLocation_ = true;
+  locationSource_ = source;
+  snapshot_.city = label;
+  snapshot_.resolvedCity = label;
+  snapshot_.valid = false;
+  snapshot_.error = "";
+  saveLocation();
+  refreshRequested_ = true;
+  changed_ = true;
+  return true;
+}
+
+bool WeatherService::autoLocateFromIp() {
+  String body;
+  snapshot_.error = "";
+  if (!httpGet(F("https://ipwho.is/"), body)) {
+    snapshot_.error = F("网络自动定位失败，请手动填写城市");
+    changed_ = true;
+    return false;
+  }
+
+  float latitude = 0.0f;
+  float longitude = 0.0f;
+  String city;
+  if (!parseNumberAfter(body, F("\"latitude\":"), latitude) ||
+      !parseNumberAfter(body, F("\"longitude\":"), longitude) ||
+      !parseStringAfter(body, F("\"city\":"), city) || city.isEmpty()) {
+    snapshot_.error = F("网络定位没有返回有效城市");
+    changed_ = true;
+    return false;
+  }
+
+  return setCoordinates(latitude, longitude, city, "ip");
 }
 
 void WeatherService::requestRefresh() {
@@ -96,6 +152,22 @@ bool WeatherService::geocode() {
   snapshot_.resolvedCity = resolved.isEmpty() ? snapshot_.city : resolved;
   saveLocation();
   return true;
+}
+
+bool WeatherService::reverseGeocode(float latitude, float longitude, String& city) {
+  String url = F("https://nominatim.openstreetmap.org/reverse?format=jsonv2&addressdetails=1&accept-language=zh-CN&zoom=10&lat=");
+  url += String(latitude, 6);
+  url += F("&lon=");
+  url += String(longitude, 6);
+  String body;
+  if (!httpGet(url, body)) return false;
+  const size_t address = body.indexOf(F("\"address\":"));
+  if (address == static_cast<size_t>(-1)) return false;
+  if (parseStringAfter(body, F("\"city\":"), city, address) && !city.isEmpty()) return true;
+  if (parseStringAfter(body, F("\"town\":"), city, address) && !city.isEmpty()) return true;
+  if (parseStringAfter(body, F("\"municipality\":"), city, address) && !city.isEmpty()) return true;
+  if (parseStringAfter(body, F("\"county\":"), city, address) && !city.isEmpty()) return true;
+  return parseStringAfter(body, F("\"state\":"), city, address) && !city.isEmpty();
 }
 
 bool WeatherService::fetchForecast() {
@@ -200,7 +272,9 @@ bool WeatherService::httpGet(const String& url, String& response) {
     return false;
   }
   http.addHeader(F("Accept"), F("application/json"));
-  http.addHeader(F("User-Agent"), F("PaperDesk/1.0"));
+  http.addHeader(F("User-Agent"),
+                 F("PaperDesk-M5Stack/1.0 (github.com/xiaocheng2014/papers3-paper-desk)"));
+  http.addHeader(F("Accept-Language"), F("zh-CN,zh;q=0.9,en;q=0.6"));
   const int status = http.GET();
   if (status != HTTP_CODE_OK) {
     snapshot_.error = String(F("天气服务 HTTP ")) + status;
@@ -219,6 +293,7 @@ void WeatherService::saveLocation() {
   preferences_.putFloat("lat", latitude_);
   preferences_.putFloat("lon", longitude_);
   preferences_.putBool("located", hasLocation_);
+  preferences_.putString("source", locationSource_);
   preferences_.end();
 }
 

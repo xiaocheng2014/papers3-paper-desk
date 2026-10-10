@@ -75,6 +75,8 @@ class WifiPortal {
   void handleMode();
   void handleBadge();
   void handleWeather();
+  void handleWeatherLocation();
+  void handleWeatherAutoLocation();
   void handleDeviceLock();
   void handleDeviceRestart();
   void handleDevicePowerOff();
