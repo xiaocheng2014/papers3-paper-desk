@@ -849,29 +849,43 @@ void ClockView::showBadge(const AppState& state) {
   endFrame();
 }
 
-void ClockView::showTodo(const AppState& state, size_t page) {
+void ClockView::showTodo(const AppState& state, size_t page, bool hideCompleted) {
   beginFrame(true);
   constexpr size_t kItemsPerPage = 10;
-  const size_t pageCount = max<size_t>(1, (state.todoCount() + kItemsPerPage - 1) / kItemsPerPage);
+  const size_t visibleCount = state.visibleTodoCount(hideCompleted);
+  const size_t pageCount = max<size_t>(1, (visibleCount + kItemsPerPage - 1) / kItemsPerPage);
   page = min(page, pageCount - 1);
   const size_t offset = page * kItemsPerPage;
   M5.Display.setTextDatum(textdatum_t::top_left);
   M5.Display.setFont(&fonts::efontCN_24_b);
-  M5.Display.setTextSize(2);
-  M5.Display.drawString("今日待办", 30, 35);
   M5.Display.setTextSize(1);
-  char count[32];
-  snprintf(count, sizeof(count), "%u 项", static_cast<unsigned>(state.todoCount()));
-  M5.Display.setTextDatum(textdatum_t::top_right);
-  M5.Display.drawString(count, 510, 58);
+  M5.Display.drawString("今日待办", 28, 26);
+  M5.Display.setFont(&fonts::efontCN_16);
+  const String count = hideCompleted
+                           ? String(visibleCount) + " 未完成 / " + state.todoCount() + " 全部"
+                           : String(state.todoCount()) + " 项待办";
+  M5.Display.drawString(count, 28, 72);
+
+  M5.Display.setTextDatum(textdatum_t::middle_center);
+  M5.Display.drawRoundRect(220, 28, 170, 64, 12, TFT_BLACK);
+  if (hideCompleted) {
+    M5.Display.fillRoundRect(220, 28, 170, 64, 12, TFT_BLACK);
+    M5.Display.setTextColor(TFT_WHITE, TFT_BLACK);
+  }
+  M5.Display.drawString(hideCompleted ? "隐藏完成：开" : "隐藏完成：关", 305, 60);
+  M5.Display.setTextColor(TFT_BLACK, TFT_WHITE);
+  M5.Display.drawRoundRect(405, 28, 110, 64, 12, TFT_BLACK);
+  M5.Display.drawString("清空", 460, 60);
   M5.Display.drawFastHLine(25, 115, 490, TFT_BLACK);
 
   M5.Display.setTextDatum(textdatum_t::middle_left);
   M5.Display.setFont(&fonts::efontCN_24);
-  const size_t visible = min(kItemsPerPage, state.todoCount() - min(offset, state.todoCount()));
+  const size_t visible = min(kItemsPerPage, visibleCount - min(offset, visibleCount));
   for (size_t i = 0; i < visible; ++i) {
     const int y = 130 + i * 72;
-    const auto& item = state.todo(offset + i);
+    const int sourceIndex = state.todoIndexForVisiblePosition(offset + i, hideCompleted);
+    if (sourceIndex < 0) break;
+    const auto& item = state.todo(static_cast<size_t>(sourceIndex));
     M5.Display.drawRect(32, y + 15, 36, 36, TFT_BLACK);
     if (item.completed) {
       M5.Display.drawLine(39, y + 33, 49, y + 43, TFT_BLACK);
@@ -883,7 +897,9 @@ void ClockView::showTodo(const AppState& state, size_t page) {
   }
   if (visible == 0) {
     M5.Display.setTextDatum(textdatum_t::middle_center);
-    M5.Display.drawString("暂无待办，请在网页中添加", 270, 460);
+    M5.Display.drawString(state.todoCount() == 0 ? "暂无待办，请在网页中添加"
+                                                : "全部完成，关闭过滤可查看",
+                          270, 460);
   }
   if (pageCount > 1) {
     const String pageText = String("第 ") + (page + 1) + " / " + pageCount +

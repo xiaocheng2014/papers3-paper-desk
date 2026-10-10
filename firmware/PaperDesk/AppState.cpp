@@ -382,6 +382,43 @@ bool AppState::deleteTodo(uint32_t id) {
   return false;
 }
 
+bool AppState::clearTodos() {
+  if (todos_.empty()) return true;
+  std::vector<Todo> previous;
+  previous.swap(todos_);
+  const uint32_t previousNextId = nextTodoId_;
+  nextTodoId_ = 1;
+  if (saveTodos()) {
+    ++todoRevision_;
+    return true;
+  }
+  todos_.swap(previous);
+  nextTodoId_ = previousNextId;
+  return false;
+}
+
+size_t AppState::visibleTodoCount(bool hideCompleted) const {
+  if (!hideCompleted) return todos_.size();
+  size_t count = 0;
+  for (const auto& item : todos_) {
+    if (!item.completed) ++count;
+  }
+  return count;
+}
+
+int AppState::todoIndexForVisiblePosition(size_t position, bool hideCompleted) const {
+  if (!hideCompleted) {
+    return position < todos_.size() ? static_cast<int>(position) : -1;
+  }
+  size_t visiblePosition = 0;
+  for (size_t index = 0; index < todos_.size(); ++index) {
+    if (todos_[index].completed) continue;
+    if (visiblePosition == position) return static_cast<int>(index);
+    ++visiblePosition;
+  }
+  return -1;
+}
+
 bool AppState::moveTodo(uint32_t id, int direction) {
   const int index = findTodo(id);
   const int target = index + (direction < 0 ? -1 : 1);

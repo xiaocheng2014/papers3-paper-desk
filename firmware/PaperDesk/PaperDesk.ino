@@ -28,6 +28,8 @@ bool viewDirty = true;
 uint32_t pendingTodoId = 0;
 size_t literacyIndex = 0;
 size_t todoPage = 0;
+bool todoHideCompleted = false;
+bool todoClearConfirmation = false;
 constexpr size_t kTodosPerPage = 10;
 
 struct LockQuote {
@@ -296,6 +298,7 @@ void updateApplicationView() {
   if (!wifiPortal.connected()) return;
   if (wifiPortal.consumeContentChanged()) {
     pendingTodoId = 0;
+    todoClearConfirmation = false;
     lastPortraitMode = appState.mode();
     invalidateView();
   }
@@ -318,10 +321,16 @@ void updateApplicationView() {
       break;
     case PortraitPage::kTodo:
       {
-        const size_t pageCount = max<size_t>(1, (appState.todoCount() + kTodosPerPage - 1) /
-                                                   kTodosPerPage);
-        todoPage = min(todoPage, pageCount - 1);
-        clockView.showTodo(appState, todoPage);
+        if (todoClearConfirmation) {
+          const String detail = String(appState.todoCount()) + " 条待办将被永久删除";
+          clockView.showDeviceConfirmation("清空全部待办？", detail.c_str());
+        } else {
+          const size_t visibleCount = appState.visibleTodoCount(todoHideCompleted);
+          const size_t pageCount = max<size_t>(1, (visibleCount + kTodosPerPage - 1) /
+                                                     kTodosPerPage);
+          todoPage = min(todoPage, pageCount - 1);
+          clockView.showTodo(appState, todoPage, todoHideCompleted);
+        }
       }
       break;
     case PortraitPage::kSettings:
@@ -366,6 +375,7 @@ void updateTouch() {
   if (portraitPage != PortraitPage::kMenu && touch.wasFlicked() &&
       touch.distanceX() > 80 && abs(touch.distanceX()) > abs(touch.distanceY())) {
     pendingTodoId = 0;
+    todoClearConfirmation = false;
     settingsConfirmation = SettingsConfirmation::kNone;
     portraitPage = PortraitPage::kMenu;
     screenOrientation = ScreenOrientation::kPortrait;
@@ -374,9 +384,11 @@ void updateTouch() {
     return;
   }
 
-  if (portraitPage == PortraitPage::kTodo && pendingTodoId == 0 && touch.wasFlicked() &&
+  if (portraitPage == PortraitPage::kTodo && pendingTodoId == 0 &&
+      !todoClearConfirmation && touch.wasFlicked() &&
       abs(touch.distanceY()) > 80 && abs(touch.distanceY()) > abs(touch.distanceX())) {
-    const size_t pageCount = max<size_t>(1, (appState.todoCount() + kTodosPerPage - 1) /
+    const size_t visibleCount = appState.visibleTodoCount(todoHideCompleted);
+    const size_t pageCount = max<size_t>(1, (visibleCount + kTodosPerPage - 1) /
                                                kTodosPerPage);
     if (touch.distanceY() < 0 && todoPage + 1 < pageCount) ++todoPage;
     else if (touch.distanceY() > 0 && todoPage > 0) --todoPage;
@@ -409,6 +421,7 @@ void updateTouch() {
       lastPortraitMode = paperdesk::AppState::Mode::kTodo;
       portraitPage = PortraitPage::kTodo;
       todoPage = 0;
+      todoClearConfirmation = false;
       invalidateView();
     } else if (touch.x >= 55 && touch.x <= 485 && touch.y >= 720 && touch.y <= 835) {
       portraitPage = PortraitPage::kSettings;
@@ -483,6 +496,20 @@ void updateTouch() {
 
   if (portraitPage != PortraitPage::kTodo) return;
 
+  if (todoClearConfirmation) {
+    if (touch.y >= 610 && touch.y <= 715 && touch.x >= 55 && touch.x <= 245) {
+      todoClearConfirmation = false;
+      invalidateView();
+    } else if (touch.y >= 610 && touch.y <= 715 && touch.x >= 295 && touch.x <= 485) {
+      appState.clearTodos();
+      todoClearConfirmation = false;
+      pendingTodoId = 0;
+      todoPage = 0;
+      invalidateView();
+    }
+    return;
+  }
+
   if (pendingTodoId != 0) {
     if (touch.y >= 635 && touch.y <= 727 && touch.x >= 75 && touch.x <= 245) {
       pendingTodoId = 0;
@@ -498,12 +525,27 @@ void updateTouch() {
     return;
   }
 
+  if (touch.y >= 28 && touch.y <= 100 && touch.x >= 220 && touch.x <= 390) {
+    todoHideCompleted = !todoHideCompleted;
+    todoPage = 0;
+    invalidateView();
+    return;
+  }
+  if (touch.y >= 28 && touch.y <= 100 && touch.x >= 405 && touch.x <= 520) {
+    if (appState.todoCount() > 0) {
+      todoClearConfirmation = true;
+      invalidateView();
+    }
+    return;
+  }
+
   if (touch.x <= 90 && touch.y >= 130 && touch.y < 850) {
     const uint8_t row = (touch.y - 130) / 72;
-    const size_t index = todoPage * kTodosPerPage + row;
-    if (index < appState.todoCount() && row < kTodosPerPage) {
-      pendingTodoId = appState.todo(index).id;
-      clockView.showTodoConfirmation(appState.todo(index));
+    const size_t position = todoPage * kTodosPerPage + row;
+    const int index = appState.todoIndexForVisiblePosition(position, todoHideCompleted);
+    if (index >= 0 && row < kTodosPerPage) {
+      pendingTodoId = appState.todo(static_cast<size_t>(index)).id;
+      clockView.showTodoConfirmation(appState.todo(static_cast<size_t>(index)));
       viewDirty = false;
     }
   }

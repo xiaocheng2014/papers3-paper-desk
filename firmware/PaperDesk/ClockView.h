@@ -21,7 +21,7 @@ class ClockView {
   void showPortraitMenu(AppState::Mode selected);
   void showLiteracy(size_t index);
   void showBadge(const AppState& state);
-  void showTodo(const AppState& state, size_t page);
+  void showTodo(const AppState& state, size_t page, bool hideCompleted);
   void showTodoConfirmation(const AppState::Todo& item);
   void showDeviceSettings(const AppState::DeviceSettings& settings, const String& ip);
   void showDeviceConfirmation(const char* title, const char* detail);

@@ -41,6 +41,8 @@ class AppState {
   const Badge& badge() const { return data_.badge; }
   const Todo& todo(size_t index) const { return todos_[index]; }
   size_t todoCount() const { return todos_.size(); }
+  size_t visibleTodoCount(bool hideCompleted) const;
+  int todoIndexForVisiblePosition(size_t position, bool hideCompleted) const;
   uint32_t todoRevision() const { return todoRevision_; }
   bool hasPhoto() const { return photoReady_; }
   const DeviceSettings& settings() const { return data_.settings; }
@@ -50,6 +52,7 @@ class AppState {
                    const String& company, const String& number, int layout);
   bool addTodo(const String& text);
   bool deleteTodo(uint32_t id);
+  bool clearTodos();
   bool moveTodo(uint32_t id, int direction);
   bool setTodoCompleted(uint32_t id, bool completed);
   bool updateSettings(bool wifiPowerSave, bool webManagementEnabled,
