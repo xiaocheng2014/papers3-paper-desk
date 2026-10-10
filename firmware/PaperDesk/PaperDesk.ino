@@ -1,0 +1,379 @@
+#include <M5Unified.h>
+#include <WiFi.h>
+#include <esp_sntp.h>
+#include <time.h>
+
+#include "AppConfig.h"
+#include "AppState.h"
+#include "ClockView.h"
+#include "WeatherService.h"
+#include "WifiPortal.h"
+
+namespace {
+
+paperdesk::WifiPortal wifiPortal;
+paperdesk::ClockView clockView;
+paperdesk::AppState appState;
+paperdesk::WeatherService weatherService;
+
+paperdesk::WifiPortal::State lastWifiState = paperdesk::WifiPortal::State::kIdle;
+uint32_t lastClockRefreshMs = 0;
+uint32_t resetTouchStartedMs = 0;
+uint8_t lastResetProgress = 0;
+bool clockDrawn = false;
+bool ntpConfigured = false;
+bool ntpSynced = false;
+bool viewDirty = true;
+uint32_t pendingTodoId = 0;
+size_t literacyIndex = 0;
+
+enum class ScreenOrientation : uint8_t { kLandscape, kPortrait };
+enum class PortraitPage : uint8_t { kMenu, kClock, kLiteracy, kBadge, kTodo };
+
+ScreenOrientation screenOrientation = ScreenOrientation::kLandscape;
+ScreenOrientation orientationCandidate = ScreenOrientation::kLandscape;
+PortraitPage portraitPage = PortraitPage::kMenu;
+paperdesk::AppState::Mode lastPortraitMode = paperdesk::AppState::Mode::kBadge;
+uint8_t orientationCandidateCount = 0;
+uint32_t lastOrientationSampleMs = 0;
+uint32_t gyroQuietStartedMs = 0;
+uint32_t lastOrientationSwitchMs = 0;
+float accumulatedRotationDegrees = 0.0f;
+bool gyroRotationArmed = true;
+bool firstOrientationLogged = false;
+
+void invalidateView();
+
+bool rtcHasUsableTime() {
+  if (!M5.Rtc.isEnabled()) return false;
+  const auto dateTime = M5.Rtc.getDateTime();
+  return dateTime.date.year >= 2024 && dateTime.date.year <= 2099;
+}
+
+void configureTime() {
+  setenv("TZ", paperdesk::kTimeZone, 1);
+  tzset();
+  if (rtcHasUsableTime()) {
+    M5.Rtc.setSystemTimeFromRtc();
+  }
+}
+
+void updateNtp() {
+  if (!wifiPortal.connected()) return;
+  if (!ntpConfigured) {
+    configTzTime(paperdesk::kTimeZone, paperdesk::kNtpServer1,
+                 paperdesk::kNtpServer2, paperdesk::kNtpServer3);
+    ntpConfigured = true;
+  }
+
+  if (!ntpSynced && sntp_get_sync_status() == SNTP_SYNC_STATUS_COMPLETED) {
+    const time_t now = time(nullptr);
+    if (now > 1704067200) {
+      M5.Rtc.setDateTime(gmtime(&now));
+      ntpSynced = true;
+      clockDrawn = false;
+    }
+  }
+}
+
+void renderForWifiState(bool force = false) {
+  const auto state = wifiPortal.state();
+  if (!force && state == lastWifiState) return;
+  lastWifiState = state;
+
+  switch (state) {
+    case paperdesk::WifiPortal::State::kConnecting:
+      clockView.setPortrait(false);
+      screenOrientation = ScreenOrientation::kLandscape;
+      clockView.showConnecting(wifiPortal.stationSsid());
+      clockDrawn = false;
+      break;
+    case paperdesk::WifiPortal::State::kProvisioning:
+    case paperdesk::WifiPortal::State::kConnectionFailed:
+      clockView.setPortrait(false);
+      screenOrientation = ScreenOrientation::kLandscape;
+      clockView.showProvisioning(wifiPortal.apSsid(), wifiPortal.lastError());
+      clockDrawn = false;
+      break;
+    case paperdesk::WifiPortal::State::kConnected:
+      portraitPage = PortraitPage::kMenu;
+      screenOrientation = ScreenOrientation::kPortrait;
+      clockView.setPortrait(true);
+      invalidateView();
+      break;
+    default:
+      break;
+  }
+}
+
+void updateClock() {
+  if (!wifiPortal.connected() || portraitPage != PortraitPage::kClock) return;
+  const uint32_t nowMs = millis();
+  if (clockDrawn && nowMs - lastClockRefreshMs < paperdesk::kClockRefreshMs) return;
+
+  const time_t now = time(nullptr);
+  clockView.showClock(now, wifiPortal.stationSsid(), wifiPortal.stationIp(), ntpSynced,
+                      M5.Power.getBatteryLevel(), weatherService.snapshot(), !clockDrawn);
+  lastClockRefreshMs = nowMs - (nowMs % paperdesk::kClockRefreshMs);
+  clockDrawn = true;
+  viewDirty = false;
+}
+
+void invalidateView() {
+  viewDirty = true;
+  clockDrawn = false;
+}
+
+void applyOrientation(ScreenOrientation detected, const char* source) {
+  if (detected == screenOrientation) return;
+  screenOrientation = detected;
+  lastOrientationSwitchMs = millis();
+  // Discard the remainder of the movement that produced this transition.
+  // A new gesture is accepted only after the device has become still again.
+  gyroRotationArmed = false;
+  gyroQuietStartedMs = 0;
+  accumulatedRotationDegrees = 0.0f;
+  orientationCandidate = detected;
+  orientationCandidateCount = 6;
+  pendingTodoId = 0;
+  clockView.setPortrait(detected == ScreenOrientation::kPortrait);
+  invalidateView();
+  Serial.printf("[orientation] switched to %s via %s\n",
+                detected == ScreenOrientation::kPortrait ? "portrait" : "landscape", source);
+}
+
+void updateOrientation() {
+  if (!wifiPortal.connected() || !M5.Imu.isEnabled()) return;
+  const uint32_t nowMs = millis();
+  const uint32_t elapsedMs = nowMs - lastOrientationSampleMs;
+  if (elapsedMs < 100) return;
+  lastOrientationSampleMs = nowMs;
+  if (!M5.Imu.update()) return;
+
+  const auto imu = M5.Imu.getImuData();
+  const float absX = fabsf(imu.accel.x);
+  const float absY = fabsf(imu.accel.y);
+  if (!firstOrientationLogged) {
+    firstOrientationLogged = true;
+    Serial.printf("[orientation] accel x=%.2f y=%.2f z=%.2f, gyro z=%.2f\n",
+                  imu.accel.x, imu.accel.y, imu.accel.z, imu.gyro.z);
+  }
+
+  // Let the physical movement and the relatively slow e-paper refresh settle
+  // before accepting another orientation transition.
+  if (lastOrientationSwitchMs != 0 && nowMs - lastOrientationSwitchMs < 1200) return;
+
+  // When PaperS3 is flat, gravity is on Z and cannot reveal its in-plane
+  // orientation. Integrate a deliberate quarter-turn around Z instead.
+  if (fabsf(imu.gyro.z) < 5.0f) {
+    if (gyroQuietStartedMs == 0) gyroQuietStartedMs = nowMs;
+    if (!gyroRotationArmed && nowMs - gyroQuietStartedMs >= 350) {
+      gyroRotationArmed = true;
+      accumulatedRotationDegrees = 0.0f;
+    }
+  } else {
+    gyroQuietStartedMs = 0;
+    if (gyroRotationArmed) {
+      accumulatedRotationDegrees += imu.gyro.z * (elapsedMs / 1000.0f);
+      if (fabsf(accumulatedRotationDegrees) >= 48.0f) {
+        const ScreenOrientation toggled = screenOrientation == ScreenOrientation::kLandscape
+                                              ? ScreenOrientation::kPortrait
+                                              : ScreenOrientation::kLandscape;
+        gyroRotationArmed = false;
+        accumulatedRotationDegrees = 0.0f;
+        applyOrientation(toggled, "gyro");
+        return;
+      }
+    }
+  }
+
+  // Gravity-based orientation is reliable only when the device is standing.
+  // While it is flat (Z close to 1 g), the gyro path above owns rotation.
+  if (fabsf(imu.accel.z) > 0.72f || max(absX, absY) < 0.55f ||
+      fabsf(absX - absY) < 0.18f) return;
+
+  // PaperS3's BMI270 is mounted with its axes rotated relative to the native
+  // display coordinates: Y-dominant gravity is physical landscape.
+  const ScreenOrientation detected = absY > absX
+                                         ? ScreenOrientation::kLandscape
+                                         : ScreenOrientation::kPortrait;
+  if (detected != orientationCandidate) {
+    orientationCandidate = detected;
+    orientationCandidateCount = 1;
+    return;
+  }
+  if (orientationCandidateCount < 6) ++orientationCandidateCount;
+  if (orientationCandidateCount < 6 || detected == screenOrientation) return;
+
+  applyOrientation(detected, "gravity");
+}
+
+void updateApplicationView() {
+  if (!wifiPortal.connected()) return;
+  if (wifiPortal.consumeContentChanged()) {
+    pendingTodoId = 0;
+    lastPortraitMode = appState.mode();
+    invalidateView();
+  }
+  if (!viewDirty) return;
+  if (portraitPage == PortraitPage::kClock) {
+    updateClock();
+    return;
+  }
+  switch (portraitPage) {
+    case PortraitPage::kMenu:
+      clockView.showPortraitMenu(appState.mode());
+      break;
+    case PortraitPage::kClock:
+      break;
+    case PortraitPage::kLiteracy:
+      clockView.showLiteracy(literacyIndex);
+      break;
+    case PortraitPage::kBadge:
+      clockView.showBadge(appState);
+      break;
+    case PortraitPage::kTodo:
+      clockView.showTodo(appState);
+      break;
+  }
+  viewDirty = false;
+}
+
+void updateTouch() {
+  const auto touch = M5.Touch.getDetail();
+  const bool inResetCorner = touch.isPressed() && touch.x < 150 && touch.y < 110;
+  if (!inResetCorner) {
+    if (resetTouchStartedMs != 0 && lastResetProgress != 0) invalidateView();
+    resetTouchStartedMs = 0;
+    lastResetProgress = 0;
+  } else {
+    if (resetTouchStartedMs == 0) resetTouchStartedMs = millis();
+    const uint32_t heldMs = millis() - resetTouchStartedMs;
+    const uint8_t progress = min<uint32_t>(100, heldMs * 100 / paperdesk::kWifiResetHoldMs);
+    if (progress >= lastResetProgress + 10) {
+      lastResetProgress = progress;
+      clockView.showWifiResetProgress(progress);
+    }
+    if (heldMs >= paperdesk::kWifiResetHoldMs) {
+      wifiPortal.clearCredentials();
+      delay(200);
+      ESP.restart();
+    }
+    return;
+  }
+
+  if (!wifiPortal.connected()) return;
+
+  if (portraitPage != PortraitPage::kMenu && touch.wasFlicked() &&
+      touch.distanceX() > 80 && abs(touch.distanceX()) > abs(touch.distanceY())) {
+    pendingTodoId = 0;
+    portraitPage = PortraitPage::kMenu;
+    screenOrientation = ScreenOrientation::kPortrait;
+    clockView.setPortrait(true);
+    invalidateView();
+    return;
+  }
+
+  if (!touch.wasClicked()) return;
+
+  if (portraitPage == PortraitPage::kMenu) {
+    if (touch.x >= 55 && touch.x <= 485 && touch.y >= 155 && touch.y <= 305) {
+      portraitPage = PortraitPage::kClock;
+      screenOrientation = ScreenOrientation::kLandscape;
+      clockView.setPortrait(false);
+      invalidateView();
+    } else if (touch.x >= 55 && touch.x <= 485 && touch.y >= 345 && touch.y <= 495) {
+      portraitPage = PortraitPage::kLiteracy;
+      screenOrientation = ScreenOrientation::kLandscape;
+      clockView.setPortrait(false);
+      invalidateView();
+    } else if (touch.x >= 55 && touch.x <= 485 && touch.y >= 535 && touch.y <= 685) {
+      appState.setMode("badge");
+      lastPortraitMode = paperdesk::AppState::Mode::kBadge;
+      portraitPage = PortraitPage::kBadge;
+      invalidateView();
+    } else if (touch.x >= 55 && touch.x <= 485 && touch.y >= 725 && touch.y <= 875) {
+      appState.setMode("todo");
+      lastPortraitMode = paperdesk::AppState::Mode::kTodo;
+      portraitPage = PortraitPage::kTodo;
+      invalidateView();
+    }
+    return;
+  }
+
+  if (portraitPage == PortraitPage::kLiteracy) {
+    if (touch.x < M5.Display.width() / 2) {
+      literacyIndex = literacyIndex == 0 ? paperdesk::kLiteracyEntryCount - 1 : literacyIndex - 1;
+    } else {
+      literacyIndex = (literacyIndex + 1) % paperdesk::kLiteracyEntryCount;
+    }
+    invalidateView();
+    return;
+  }
+
+  if (portraitPage != PortraitPage::kTodo) return;
+
+  if (pendingTodoId != 0) {
+    if (touch.y >= 635 && touch.y <= 727 && touch.x >= 75 && touch.x <= 245) {
+      pendingTodoId = 0;
+      invalidateView();
+    } else if (touch.y >= 635 && touch.y <= 727 && touch.x >= 295 && touch.x <= 465) {
+      const int index = appState.findTodo(pendingTodoId);
+      if (index >= 0) {
+        appState.setTodoCompleted(pendingTodoId, !appState.todo(index).completed);
+      }
+      pendingTodoId = 0;
+      invalidateView();
+    }
+    return;
+  }
+
+  if (touch.x <= 90 && touch.y >= 130 && touch.y < 850) {
+    const uint8_t row = (touch.y - 130) / 72;
+    if (row < appState.todoCount() && row < 10) {
+      pendingTodoId = appState.todo(row).id;
+      clockView.showTodoConfirmation(appState.todo(row));
+      viewDirty = false;
+    }
+  }
+}
+
+}  // namespace
+
+void setup() {
+  Serial.begin(115200);
+  delay(150);
+  Serial.println("\n[paperdesk] booting integrated firmware");
+
+  auto config = M5.config();
+  config.internal_spk = false;
+  config.internal_mic = false;
+  config.led_brightness = 0;
+  M5.begin(config);
+  M5.Speaker.end();
+
+  clockView.begin();
+  appState.begin();
+  weatherService.begin();
+  lastPortraitMode = appState.mode();
+  configureTime();
+  wifiPortal.attachState(&appState);
+  wifiPortal.attachWeather(&weatherService);
+  wifiPortal.begin();
+  renderForWifiState(true);
+  Serial.printf("[paperdesk] display initialized; IMU=%s; speaker and microphone disabled\n",
+                M5.Imu.isEnabled() ? "ready" : "unavailable");
+}
+
+void loop() {
+  M5.update();
+  wifiPortal.update();
+  updateNtp();
+  renderForWifiState();
+  weatherService.update(wifiPortal.connected());
+  if (weatherService.consumeChanged()) invalidateView();
+  updateApplicationView();
+  updateClock();
+  updateTouch();
+  delay(5);
+}
