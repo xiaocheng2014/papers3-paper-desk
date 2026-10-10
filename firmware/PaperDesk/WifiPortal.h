@@ -68,6 +68,7 @@ class WifiPortal {
   void handleTodoDelete();
   void handleTodoMove();
   void handleTodoToggle();
+  void handleTodoTemplates();
   void handleTodoTemplateSave();
   void handleTodoTemplateDelete();
   void handleTodoTemplateImport();
