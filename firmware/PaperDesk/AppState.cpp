@@ -11,6 +11,8 @@ constexpr char AppState::kPhotoTempPath[];
 constexpr char AppState::kTemplateDirectory[];
 constexpr char AppState::kLegacyTemplatePath[];
 constexpr char AppState::kTemplateTempPath[];
+constexpr char AppState::kTodoPath[];
+constexpr char AppState::kTodoTempPath[];
 
 bool AppState::begin() {
   fileSystemReady_ = FFat.begin(true);
@@ -23,6 +25,7 @@ bool AppState::begin() {
     data_.mode = static_cast<uint8_t>(Mode::kBadge);
     save();
   }
+  loadTodos();
   loadTemplates();
   if (fileSystemReady_) {
     File photo = FFat.open(kPhotoPath, FILE_READ);
@@ -37,7 +40,8 @@ void AppState::setDefaults() {
   data_.magic = kMagic;
   data_.version = kVersion;
   data_.mode = static_cast<uint8_t>(Mode::kBadge);
-  data_.nextTodoId = 1;
+  todos_.clear();
+  nextTodoId_ = 1;
   copyText(data_.badge.name, sizeof(data_.badge.name), "PaperDesk");
   copyText(data_.badge.role, sizeof(data_.badge.role), "Your role");
   copyText(data_.badge.contact, sizeof(data_.badge.contact), "contact@example.com");
@@ -49,17 +53,33 @@ bool AppState::load() {
   if (length == sizeof(data_)) {
     const size_t read = preferences_.getBytes("state", &data_, sizeof(data_));
     preferences_.end();
-    if (read != sizeof(data_) || data_.magic != kMagic ||
-        data_.mode > static_cast<uint8_t>(Mode::kTodo) || data_.todoCount > kMaxTodos) {
-      return false;
-    }
-    if (data_.version == kVersion) return true;
-    // V2 has the same compact layout; only its version marker needs updating.
-    if (data_.version == 2) {
-      data_.version = kVersion;
-      return save();
-    }
-    return false;
+    return read == sizeof(data_) && data_.magic == kMagic && data_.version == kVersion &&
+           data_.mode <= static_cast<uint8_t>(Mode::kTodo);
+  }
+
+  struct LegacyDataV4 {
+    uint32_t magic;
+    uint16_t version;
+    uint8_t mode;
+    uint8_t todoCount;
+    uint32_t nextTodoId;
+    Badge badge;
+    Todo todos[12];
+  };
+  if (length == sizeof(LegacyDataV4)) {
+    LegacyDataV4 legacy{};
+    const size_t read = preferences_.getBytes("state", &legacy, sizeof(legacy));
+    preferences_.end();
+    if (read != sizeof(legacy) || legacy.magic != kMagic ||
+        (legacy.version != 2 && legacy.version != 4) ||
+        legacy.mode > static_cast<uint8_t>(Mode::kTodo) || legacy.todoCount > 12) return false;
+    setDefaults();
+    data_.mode = legacy.mode;
+    data_.badge = legacy.badge;
+    todos_.assign(legacy.todos, legacy.todos + legacy.todoCount);
+    nextTodoId_ = legacy.nextTodoId;
+    if (fileSystemReady_ && !saveTodos()) return false;
+    return save();
   }
 
   struct LegacyTodoTemplateV3 {
@@ -75,7 +95,7 @@ bool AppState::load() {
     uint8_t todoCount;
     uint32_t nextTodoId;
     Badge badge;
-    Todo todos[kMaxTodos];
+    Todo todos[12];
     uint8_t templateCount;
     uint32_t nextTemplateId;
     LegacyTodoTemplateV3 templates[6];
@@ -92,17 +112,17 @@ bool AppState::load() {
     preferences_.end();
     if (read != sizeof(*legacyV3) || legacyV3->magic != kMagic || legacyV3->version != 3 ||
         legacyV3->mode > static_cast<uint8_t>(Mode::kTodo) ||
-        legacyV3->todoCount > kMaxTodos || legacyV3->templateCount > 6) return false;
+        legacyV3->todoCount > 12 || legacyV3->templateCount > 6) return false;
     for (uint8_t i = 0; i < legacyV3->templateCount; ++i) {
       if (legacyV3->templates[i].itemCount > 8) return false;
     }
     setDefaults();
     data_.mode = legacyV3->mode;
-    data_.todoCount = legacyV3->todoCount;
-    data_.nextTodoId = legacyV3->nextTodoId;
     data_.badge = legacyV3->badge;
-    memcpy(data_.todos, legacyV3->todos, sizeof(legacyV3->todos));
+    todos_.assign(legacyV3->todos, legacyV3->todos + legacyV3->todoCount);
+    nextTodoId_ = legacyV3->nextTodoId;
     if (fileSystemReady_) {
+      if (!saveTodos()) return false;
       FFat.mkdir(kTemplateDirectory);
       for (uint8_t i = 0; i < legacyV3->templateCount; ++i) {
         String items;
@@ -131,7 +151,7 @@ bool AppState::load() {
     uint8_t todoCount;
     uint32_t nextTodoId;
     LegacyBadgeV1 badge;
-    Todo todos[kMaxTodos];
+    Todo todos[12];
   };
   LegacyDataV1 legacy{};
   const size_t read = length == sizeof(legacy)
@@ -139,7 +159,7 @@ bool AppState::load() {
                           : 0;
   preferences_.end();
   if (read != sizeof(legacy) || legacy.magic != kMagic || legacy.version != 1 ||
-      legacy.mode > static_cast<uint8_t>(Mode::kTodo) || legacy.todoCount > kMaxTodos) {
+      legacy.mode > static_cast<uint8_t>(Mode::kTodo) || legacy.todoCount > 12) {
     return false;
   }
 
@@ -147,14 +167,14 @@ bool AppState::load() {
   data_.magic = kMagic;
   data_.version = kVersion;
   data_.mode = legacy.mode;
-  data_.todoCount = legacy.todoCount;
-  data_.nextTodoId = legacy.nextTodoId;
+  todos_.assign(legacy.todos, legacy.todos + legacy.todoCount);
+  nextTodoId_ = legacy.nextTodoId;
   copyText(data_.badge.name, sizeof(data_.badge.name), legacy.badge.name);
   copyText(data_.badge.role, sizeof(data_.badge.role), legacy.badge.role);
   copyText(data_.badge.contact, sizeof(data_.badge.contact), legacy.badge.contact);
   // Old layout 2 was the asymmetric photo card, which is closest to B.
   data_.badge.layout = legacy.badge.layout == 2 ? 1 : min<uint8_t>(legacy.badge.layout, 1);
-  memcpy(data_.todos, legacy.todos, sizeof(legacy.todos));
+  if (fileSystemReady_ && !saveTodos()) return false;
   return save();
 }
 
@@ -163,6 +183,65 @@ bool AppState::save() {
   const size_t written = preferences_.putBytes("state", &data_, sizeof(data_));
   preferences_.end();
   return written == sizeof(data_);
+}
+
+bool AppState::loadTodos() {
+  if (!fileSystemReady_) return false;
+  File file = FFat.open(kTodoPath, FILE_READ);
+  if (!file) {
+    todos_.clear();
+    nextTodoId_ = 1;
+    return true;
+  }
+  TodoFileHeader header{};
+  const size_t expectedHeader = file.read(reinterpret_cast<uint8_t*>(&header), sizeof(header));
+  const size_t fileSize = file.size();
+  const size_t payloadSize = fileSize >= sizeof(header) ? fileSize - sizeof(header) : 0;
+  if (expectedHeader != sizeof(header) || header.magic != kTodoMagic ||
+      header.version != kTodoVersion || fileSize < sizeof(header) ||
+      payloadSize % sizeof(Todo) != 0 || header.count != payloadSize / sizeof(Todo)) {
+    file.close();
+    return false;
+  }
+  try {
+    todos_.resize(header.count);
+  } catch (...) {
+    file.close();
+    todos_.clear();
+    return false;
+  }
+  const size_t bytes = todos_.size() * sizeof(Todo);
+  const bool ok = bytes == 0 ||
+                  file.read(reinterpret_cast<uint8_t*>(todos_.data()), bytes) == bytes;
+  file.close();
+  if (!ok) {
+    todos_.clear();
+    return false;
+  }
+  nextTodoId_ = header.nextTodoId == 0 ? 1 : header.nextTodoId;
+  return true;
+}
+
+bool AppState::saveTodos() {
+  if (!fileSystemReady_) return false;
+  FFat.remove(kTodoTempPath);
+  File file = FFat.open(kTodoTempPath, FILE_WRITE);
+  if (!file) return false;
+  TodoFileHeader header{kTodoMagic, kTodoVersion, 0,
+                        static_cast<uint32_t>(todos_.size()), nextTodoId_};
+  bool ok = file.write(reinterpret_cast<const uint8_t*>(&header), sizeof(header)) == sizeof(header);
+  const size_t bytes = todos_.size() * sizeof(Todo);
+  if (ok && bytes) {
+    ok = file.write(reinterpret_cast<const uint8_t*>(todos_.data()), bytes) == bytes;
+  }
+  file.flush();
+  file.close();
+  if (!ok) {
+    FFat.remove(kTodoTempPath);
+    return false;
+  }
+  FFat.remove(kTodoPath);
+  return FFat.rename(kTodoTempPath, kTodoPath);
 }
 
 bool AppState::loadTemplates() {
@@ -234,17 +313,30 @@ bool AppState::updateBadge(const String& name, const String& role, const String&
 }
 
 bool AppState::addTodo(const String& text) {
-  if (text.isEmpty() || text.length() > 96 || data_.todoCount >= kMaxTodos) return false;
-  Todo& item = data_.todos[data_.todoCount++];
+  if (text.isEmpty() || text.length() > 96) return false;
+  const size_t previousCount = todos_.size();
+  const uint32_t previousNextId = nextTodoId_;
+  try {
+    todos_.emplace_back();
+  } catch (...) {
+    return false;
+  }
+  Todo& item = todos_.back();
   memset(&item, 0, sizeof(item));
-  item.id = data_.nextTodoId++;
+  item.id = nextTodoId_++;
   copyText(item.text, sizeof(item.text), text);
-  return save();
+  if (saveTodos()) {
+    ++todoRevision_;
+    return true;
+  }
+  todos_.resize(previousCount);
+  nextTodoId_ = previousNextId;
+  return false;
 }
 
 int AppState::findTodo(uint32_t id) const {
-  for (uint8_t i = 0; i < data_.todoCount; ++i) {
-    if (data_.todos[i].id == id) return i;
+  for (size_t i = 0; i < todos_.size(); ++i) {
+    if (todos_[i].id == id) return static_cast<int>(i);
   }
   return -1;
 }
@@ -252,27 +344,43 @@ int AppState::findTodo(uint32_t id) const {
 bool AppState::deleteTodo(uint32_t id) {
   const int index = findTodo(id);
   if (index < 0) return false;
-  for (uint8_t i = index; i + 1 < data_.todoCount; ++i) data_.todos[i] = data_.todos[i + 1];
-  --data_.todoCount;
-  memset(&data_.todos[data_.todoCount], 0, sizeof(Todo));
-  return save();
+  const Todo removed = todos_[index];
+  todos_.erase(todos_.begin() + index);
+  if (saveTodos()) {
+    ++todoRevision_;
+    return true;
+  }
+  todos_.insert(todos_.begin() + index, removed);
+  return false;
 }
 
 bool AppState::moveTodo(uint32_t id, int direction) {
   const int index = findTodo(id);
   const int target = index + (direction < 0 ? -1 : 1);
-  if (index < 0 || target < 0 || target >= data_.todoCount) return false;
-  const Todo temporary = data_.todos[index];
-  data_.todos[index] = data_.todos[target];
-  data_.todos[target] = temporary;
-  return save();
+  if (index < 0 || target < 0 || target >= static_cast<int>(todos_.size())) return false;
+  const Todo temporary = todos_[index];
+  todos_[index] = todos_[target];
+  todos_[target] = temporary;
+  if (saveTodos()) {
+    ++todoRevision_;
+    return true;
+  }
+  todos_[target] = todos_[index];
+  todos_[index] = temporary;
+  return false;
 }
 
 bool AppState::setTodoCompleted(uint32_t id, bool completed) {
   const int index = findTodo(id);
   if (index < 0) return false;
-  data_.todos[index].completed = completed ? 1 : 0;
-  return save();
+  const uint8_t previous = todos_[index].completed;
+  todos_[index].completed = completed ? 1 : 0;
+  if (saveTodos()) {
+    ++todoRevision_;
+    return true;
+  }
+  todos_[index].completed = previous;
+  return false;
 }
 
 bool AppState::saveTodoTemplate(uint32_t id, const String& name, const String& items) {
@@ -329,8 +437,8 @@ int AppState::importTodoTemplates(const String& ids) {
   if (!fileSystemReady_) return -1;
   size_t itemTotal = 0;
   size_t selectedCount = 0;
-  const uint8_t previousCount = data_.todoCount;
-  const uint32_t previousNextId = data_.nextTodoId;
+  const size_t previousCount = todos_.size();
+  const uint32_t previousNextId = nextTodoId_;
   for (uint8_t pass = 0; pass < 2; ++pass) {
     size_t start = 0;
     while (start <= ids.length()) {
@@ -349,14 +457,18 @@ int AppState::importTodoTemplates(const String& ids) {
           if (item.isEmpty()) continue;
           if (pass == 0) {
             ++itemTotal;
-            if (data_.todoCount + itemTotal > kMaxTodos) {
-              file.close();
-              return -2;
-            }
           } else {
-            Todo& todo = data_.todos[data_.todoCount++];
+            try {
+              todos_.emplace_back();
+            } catch (...) {
+              file.close();
+              todos_.resize(previousCount);
+              nextTodoId_ = previousNextId;
+              return -1;
+            }
+            Todo& todo = todos_.back();
             memset(&todo, 0, sizeof(todo));
-            todo.id = data_.nextTodoId++;
+            todo.id = nextTodoId_++;
             copyText(todo.text, sizeof(todo.text), item);
           }
         }
@@ -368,13 +480,34 @@ int AppState::importTodoTemplates(const String& ids) {
     if (selectedCount == 0) return -1;
   }
 
-  if (save()) return itemTotal;
-  while (data_.todoCount > previousCount) {
-    --data_.todoCount;
-    memset(&data_.todos[data_.todoCount], 0, sizeof(Todo));
+  if (saveTodos()) {
+    ++todoRevision_;
+    return static_cast<int>(itemTotal);
   }
-  data_.nextTodoId = previousNextId;
+  todos_.resize(previousCount);
+  nextTodoId_ = previousNextId;
   return -1;
+}
+
+String AppState::todosJsonPage(size_t offset, size_t limit, size_t& returned,
+                               bool& hasMore) const {
+  String body = F("[");
+  returned = 0;
+  if (offset < todos_.size()) returned = min(limit, todos_.size() - offset);
+  hasMore = offset + returned < todos_.size();
+  for (size_t i = 0; i < returned; ++i) {
+    if (i) body += ',';
+    const Todo& item = todos_[offset + i];
+    body += F("{\"id\":");
+    body += item.id;
+    body += F(",\"text\":\"");
+    body += jsonEscape(item.text);
+    body += F("\",\"completed\":");
+    body += item.completed ? F("true") : F("false");
+    body += '}';
+  }
+  body += ']';
+  return body;
 }
 
 String AppState::todoTemplatesJsonPage(size_t offset, size_t limit, size_t& returned,

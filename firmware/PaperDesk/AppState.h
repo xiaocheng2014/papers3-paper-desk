@@ -3,6 +3,7 @@
 #include <Arduino.h>
 #include <FS.h>
 #include <Preferences.h>
+#include <vector>
 
 namespace paperdesk {
 
@@ -10,7 +11,6 @@ class AppState {
  public:
   enum class Mode : uint8_t { kClock = 0, kBadge = 1, kTodo = 2 };
 
-  static constexpr uint8_t kMaxTodos = 12;
   static constexpr uint16_t kPhotoWidth = 240;
   static constexpr uint16_t kPhotoHeight = 240;
   static constexpr size_t kPhotoBytes = kPhotoWidth * kPhotoHeight;
@@ -33,8 +33,9 @@ class AppState {
   bool begin();
   Mode mode() const { return static_cast<Mode>(data_.mode); }
   const Badge& badge() const { return data_.badge; }
-  const Todo& todo(uint8_t index) const { return data_.todos[index]; }
-  uint8_t todoCount() const { return data_.todoCount; }
+  const Todo& todo(size_t index) const { return todos_[index]; }
+  size_t todoCount() const { return todos_.size(); }
+  uint32_t todoRevision() const { return todoRevision_; }
   bool hasPhoto() const { return photoReady_; }
 
   bool setMode(const String& value);
@@ -48,6 +49,8 @@ class AppState {
   bool saveTodoTemplate(uint32_t id, const String& name, const String& items);
   bool deleteTodoTemplate(uint32_t id);
   int importTodoTemplates(const String& ids);
+  String todosJsonPage(size_t offset, size_t limit, size_t& returned,
+                       bool& hasMore) const;
   String todoTemplatesJsonPage(size_t offset, size_t limit, size_t& returned,
                                bool& hasMore) const;
 
@@ -63,15 +66,22 @@ class AppState {
     uint32_t magic;
     uint16_t version;
     uint8_t mode;
-    uint8_t todoCount;
-    uint32_t nextTodoId;
     Badge badge;
-    Todo todos[kMaxTodos];
+  };
+
+  struct TodoFileHeader {
+    uint32_t magic;
+    uint16_t version;
+    uint16_t reserved;
+    uint32_t count;
+    uint32_t nextTodoId;
   };
 
   void setDefaults();
   bool load();
   bool save();
+  bool loadTodos();
+  bool saveTodos();
   bool loadTemplates();
   uint32_t nextTodoTemplateId() const;
   static uint32_t templateIdFromPath(const String& path);
@@ -80,15 +90,22 @@ class AppState {
   static void copyText(char* target, size_t capacity, const String& value);
 
   static constexpr uint32_t kMagic = 0x5044534B;  // PDSK
-  static constexpr uint16_t kVersion = 4;
+  static constexpr uint16_t kVersion = 5;
+  static constexpr uint32_t kTodoMagic = 0x544F444F;  // TODO
+  static constexpr uint16_t kTodoVersion = 1;
   static constexpr char kPhotoPath[] = "/badge.gray";
   static constexpr char kPhotoTempPath[] = "/badge.tmp";
   static constexpr char kTemplateDirectory[] = "/todo_templates";
   static constexpr char kLegacyTemplatePath[] = "/todo_templates.bin";
   static constexpr char kTemplateTempPath[] = "/todo_templates/.write.tmp";
+  static constexpr char kTodoPath[] = "/todos.bin";
+  static constexpr char kTodoTempPath[] = "/todos.tmp";
 
   Preferences preferences_;
   PersistedData data_{};
+  std::vector<Todo> todos_;
+  uint32_t nextTodoId_ = 1;
+  uint32_t todoRevision_ = 1;
   File photoFile_;
   size_t photoWritten_ = 0;
   bool fileSystemReady_ = false;

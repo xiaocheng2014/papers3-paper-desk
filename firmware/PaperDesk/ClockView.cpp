@@ -731,25 +731,29 @@ void ClockView::showBadge(const AppState& state) {
   endFrame();
 }
 
-void ClockView::showTodo(const AppState& state) {
+void ClockView::showTodo(const AppState& state, size_t page) {
   beginFrame(true);
+  constexpr size_t kItemsPerPage = 10;
+  const size_t pageCount = max<size_t>(1, (state.todoCount() + kItemsPerPage - 1) / kItemsPerPage);
+  page = min(page, pageCount - 1);
+  const size_t offset = page * kItemsPerPage;
   M5.Display.setTextDatum(textdatum_t::top_left);
   M5.Display.setFont(&fonts::efontCN_24_b);
   M5.Display.setTextSize(2);
   M5.Display.drawString("今日待办", 30, 35);
   M5.Display.setTextSize(1);
   char count[32];
-  snprintf(count, sizeof(count), "%u / %u", state.todoCount(), AppState::kMaxTodos);
+  snprintf(count, sizeof(count), "%u 项", static_cast<unsigned>(state.todoCount()));
   M5.Display.setTextDatum(textdatum_t::top_right);
   M5.Display.drawString(count, 510, 58);
   M5.Display.drawFastHLine(25, 115, 490, TFT_BLACK);
 
   M5.Display.setTextDatum(textdatum_t::middle_left);
   M5.Display.setFont(&fonts::efontCN_24);
-  const uint8_t visible = min<uint8_t>(state.todoCount(), 10);
-  for (uint8_t i = 0; i < visible; ++i) {
+  const size_t visible = min(kItemsPerPage, state.todoCount() - min(offset, state.todoCount()));
+  for (size_t i = 0; i < visible; ++i) {
     const int y = 130 + i * 72;
-    const auto& item = state.todo(i);
+    const auto& item = state.todo(offset + i);
     M5.Display.drawRect(32, y + 15, 36, 36, TFT_BLACK);
     if (item.completed) {
       M5.Display.drawLine(39, y + 33, 49, y + 43, TFT_BLACK);
@@ -762,6 +766,13 @@ void ClockView::showTodo(const AppState& state) {
   if (visible == 0) {
     M5.Display.setTextDatum(textdatum_t::middle_center);
     M5.Display.drawString("暂无待办，请在网页中添加", 270, 460);
+  }
+  if (pageCount > 1) {
+    const String pageText = String("第 ") + (page + 1) + " / " + pageCount +
+                            " 页  ·  上下滑动翻页";
+    M5.Display.setTextDatum(textdatum_t::bottom_center);
+    M5.Display.setFont(&fonts::efontCN_24);
+    M5.Display.drawString(pageText, 270, 925);
   }
   endFrame();
 }

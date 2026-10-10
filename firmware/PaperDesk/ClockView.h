@@ -21,7 +21,7 @@ class ClockView {
   void showPortraitMenu(AppState::Mode selected);
   void showLiteracy(size_t index);
   void showBadge(const AppState& state);
-  void showTodo(const AppState& state);
+  void showTodo(const AppState& state, size_t page);
   void showTodoConfirmation(const AppState::Todo& item);
   void showWifiResetProgress(uint8_t percent);
 

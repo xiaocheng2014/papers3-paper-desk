@@ -64,6 +64,7 @@ class WifiPortal {
   void handleMode();
   void handleBadge();
   void handleWeather();
+  void handleTodos();
   void handleTodoAdd();
   void handleTodoDelete();
   void handleTodoMove();

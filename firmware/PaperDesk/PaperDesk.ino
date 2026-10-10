@@ -26,6 +26,8 @@ bool ntpSynced = false;
 bool viewDirty = true;
 uint32_t pendingTodoId = 0;
 size_t literacyIndex = 0;
+size_t todoPage = 0;
+constexpr size_t kTodosPerPage = 10;
 
 enum class ScreenOrientation : uint8_t { kLandscape, kPortrait };
 enum class PortraitPage : uint8_t { kMenu, kClock, kLiteracy, kBadge, kTodo };
@@ -233,7 +235,12 @@ void updateApplicationView() {
       clockView.showBadge(appState);
       break;
     case PortraitPage::kTodo:
-      clockView.showTodo(appState);
+      {
+        const size_t pageCount = max<size_t>(1, (appState.todoCount() + kTodosPerPage - 1) /
+                                                   kTodosPerPage);
+        todoPage = min(todoPage, pageCount - 1);
+        clockView.showTodo(appState, todoPage);
+      }
       break;
   }
   viewDirty = false;
@@ -274,6 +281,16 @@ void updateTouch() {
     return;
   }
 
+  if (portraitPage == PortraitPage::kTodo && pendingTodoId == 0 && touch.wasFlicked() &&
+      abs(touch.distanceY()) > 80 && abs(touch.distanceY()) > abs(touch.distanceX())) {
+    const size_t pageCount = max<size_t>(1, (appState.todoCount() + kTodosPerPage - 1) /
+                                               kTodosPerPage);
+    if (touch.distanceY() < 0 && todoPage + 1 < pageCount) ++todoPage;
+    else if (touch.distanceY() > 0 && todoPage > 0) --todoPage;
+    invalidateView();
+    return;
+  }
+
   if (!touch.wasClicked()) return;
 
   if (portraitPage == PortraitPage::kMenu) {
@@ -296,6 +313,7 @@ void updateTouch() {
       appState.setMode("todo");
       lastPortraitMode = paperdesk::AppState::Mode::kTodo;
       portraitPage = PortraitPage::kTodo;
+      todoPage = 0;
       invalidateView();
     }
     return;
@@ -330,9 +348,10 @@ void updateTouch() {
 
   if (touch.x <= 90 && touch.y >= 130 && touch.y < 850) {
     const uint8_t row = (touch.y - 130) / 72;
-    if (row < appState.todoCount() && row < 10) {
-      pendingTodoId = appState.todo(row).id;
-      clockView.showTodoConfirmation(appState.todo(row));
+    const size_t index = todoPage * kTodosPerPage + row;
+    if (index < appState.todoCount() && row < kTodosPerPage) {
+      pendingTodoId = appState.todo(index).id;
+      clockView.showTodoConfirmation(appState.todo(index));
       viewDirty = false;
     }
   }

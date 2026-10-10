@@ -94,6 +94,7 @@ void WifiPortal::configureRoutes() {
   server_.on("/api/mode", HTTP_POST, [this] { handleMode(); });
   server_.on("/api/badge", HTTP_POST, [this] { handleBadge(); });
   server_.on("/api/weather", HTTP_POST, [this] { handleWeather(); });
+  server_.on("/api/todos", HTTP_GET, [this] { handleTodos(); });
   server_.on("/api/todos/add", HTTP_POST, [this] { handleTodoAdd(); });
   server_.on("/api/todos/delete", HTTP_POST, [this] { handleTodoDelete(); });
   server_.on("/api/todos/move", HTTP_POST, [this] { handleTodoMove(); });
@@ -335,19 +336,9 @@ void WifiPortal::handleApp() {
   body += appState_->badge().layout;
   body += F(",\"hasPhoto\":");
   body += appState_->hasPhoto() ? F("true") : F("false");
-  body += F("},\"todos\":[");
-  for (uint8_t i = 0; i < appState_->todoCount(); ++i) {
-    if (i) body += ',';
-    const auto& item = appState_->todo(i);
-    body += F("{\"id\":");
-    body += item.id;
-    body += F(",\"text\":\"");
-    body += jsonEscape(item.text);
-    body += F("\",\"completed\":");
-    body += item.completed ? F("true") : F("false");
-    body += '}';
-  }
-  body += F("],\"weather\":{");
+  body += F("},\"todoRevision\":");
+  body += appState_->todoRevision();
+  body += F(",\"weather\":{");
   if (weatherService_) {
     const auto& weather = weatherService_->snapshot();
     body += F("\"city\":\"");
@@ -398,10 +389,31 @@ void WifiPortal::handleWeather() {
   server_.send(200, "application/json", "{\"ok\":true}");
 }
 
+void WifiPortal::handleTodos() {
+  if (!requireAuthorized()) return;
+  if (!appState_) {
+    server_.send(503, "application/json", "{\"error\":\"state_unavailable\"}");
+    return;
+  }
+  const size_t offset = strtoul(server_.arg("offset").c_str(), nullptr, 10);
+  constexpr size_t kPageSize = 20;
+  size_t returned = 0;
+  bool hasMore = false;
+  String body = F("{\"todos\":");
+  body += appState_->todosJsonPage(offset, kPageSize, returned, hasMore);
+  body += F(",\"total\":");
+  body += appState_->todoCount();
+  body += F(",\"nextOffset\":");
+  if (hasMore) body += offset + returned;
+  else body += F("null");
+  body += '}';
+  server_.send(200, "application/json; charset=utf-8", body);
+}
+
 void WifiPortal::handleTodoAdd() {
   if (!requireAuthorized()) return;
   if (!appState_ || !appState_->addTodo(server_.arg("text"))) {
-    server_.send(400, "text/plain; charset=utf-8", "待办为空、过长，或已达到 12 条上限。");
+    server_.send(400, "text/plain; charset=utf-8", "待办为空、内容过长，或设备存储失败。");
     return;
   }
   contentChanged_ = true;
@@ -495,10 +507,6 @@ void WifiPortal::handleTodoTemplateImport() {
     return;
   }
   const int imported = appState_->importTodoTemplates(server_.arg("ids"));
-  if (imported == -2) {
-    server_.send(400, "text/plain; charset=utf-8", "导入后会超过 12 条 Todo，请先删除部分待办。");
-    return;
-  }
   if (imported < 0) {
     server_.send(400, "text/plain; charset=utf-8", "请选择有效的模板。");
     return;
