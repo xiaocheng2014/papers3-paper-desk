@@ -60,6 +60,7 @@ class WifiPortal {
   void startConnection(const String& ssid, const String& password, bool fromPortal);
   void startPortal(const String& reason = String());
   void finishConnection();
+  void syncNetworkServices();
   void saveCredentials(const String& ssid, const String& password);
   bool loadCredentials();
   void scheduleRestart();
@@ -74,7 +75,6 @@ class WifiPortal {
   void handleMode();
   void handleBadge();
   void handleWeather();
-  void handleDeviceSettings();
   void handleDeviceLock();
   void handleDeviceRestart();
   void handleDevicePowerOff();
@@ -118,6 +118,9 @@ class WifiPortal {
   bool pendingFromPortal_ = false;
   bool portalActive_ = false;
   bool routesConfigured_ = false;
+  bool serverRunning_ = false;
+  bool mdnsRunning_ = false;
+  uint8_t appliedWifiPowerSave_ = 2;
   bool restartScheduled_ = false;
   bool clearCredentialsOnRestart_ = false;
   bool contentChanged_ = false;

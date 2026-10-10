@@ -50,7 +50,8 @@ constexpr LockQuote kLockQuotes[] = {
 };
 
 enum class ScreenOrientation : uint8_t { kLandscape, kPortrait };
-enum class PortraitPage : uint8_t { kMenu, kClock, kLiteracy, kBadge, kTodo };
+enum class PortraitPage : uint8_t { kMenu, kClock, kLiteracy, kBadge, kTodo, kSettings };
+enum class SettingsConfirmation : uint8_t { kNone, kRestart, kPowerOff };
 
 ScreenOrientation screenOrientation = ScreenOrientation::kLandscape;
 ScreenOrientation orientationCandidate = ScreenOrientation::kLandscape;
@@ -68,6 +69,7 @@ size_t lockQuoteIndex = 0;
 uint32_t lastActivityMs = 0;
 PortraitPage pageBeforeLock = PortraitPage::kMenu;
 ScreenOrientation orientationBeforeLock = ScreenOrientation::kPortrait;
+SettingsConfirmation settingsConfirmation = SettingsConfirmation::kNone;
 
 void invalidateView();
 
@@ -322,6 +324,15 @@ void updateApplicationView() {
         clockView.showTodo(appState, todoPage);
       }
       break;
+    case PortraitPage::kSettings:
+      if (settingsConfirmation == SettingsConfirmation::kRestart) {
+        clockView.showDeviceConfirmation("确认重启？", "设备会自动重新启动");
+      } else if (settingsConfirmation == SettingsConfirmation::kPowerOff) {
+        clockView.showDeviceConfirmation("确认关机？", "再次开机请按机身侧键");
+      } else {
+        clockView.showDeviceSettings(appState.settings(), wifiPortal.stationIp());
+      }
+      break;
   }
   viewDirty = false;
 }
@@ -355,6 +366,7 @@ void updateTouch() {
   if (portraitPage != PortraitPage::kMenu && touch.wasFlicked() &&
       touch.distanceX() > 80 && abs(touch.distanceX()) > abs(touch.distanceY())) {
     pendingTodoId = 0;
+    settingsConfirmation = SettingsConfirmation::kNone;
     portraitPage = PortraitPage::kMenu;
     screenOrientation = ScreenOrientation::kPortrait;
     clockView.setPortrait(true);
@@ -377,26 +389,83 @@ void updateTouch() {
   if (portraitPage == PortraitPage::kMenu) {
     if (touch.x >= 420 && touch.y <= 120) {
       enterLockScreen();
-    } else if (touch.x >= 55 && touch.x <= 485 && touch.y >= 155 && touch.y <= 305) {
+    } else if (touch.x >= 55 && touch.x <= 485 && touch.y >= 140 && touch.y <= 255) {
       portraitPage = PortraitPage::kClock;
       screenOrientation = ScreenOrientation::kLandscape;
       clockView.setPortrait(false);
       invalidateView();
-    } else if (touch.x >= 55 && touch.x <= 485 && touch.y >= 345 && touch.y <= 495) {
+    } else if (touch.x >= 55 && touch.x <= 485 && touch.y >= 285 && touch.y <= 400) {
       portraitPage = PortraitPage::kLiteracy;
       screenOrientation = ScreenOrientation::kLandscape;
       clockView.setPortrait(false);
       invalidateView();
-    } else if (touch.x >= 55 && touch.x <= 485 && touch.y >= 535 && touch.y <= 685) {
+    } else if (touch.x >= 55 && touch.x <= 485 && touch.y >= 430 && touch.y <= 545) {
       appState.setMode("badge");
       lastPortraitMode = paperdesk::AppState::Mode::kBadge;
       portraitPage = PortraitPage::kBadge;
       invalidateView();
-    } else if (touch.x >= 55 && touch.x <= 485 && touch.y >= 725 && touch.y <= 875) {
+    } else if (touch.x >= 55 && touch.x <= 485 && touch.y >= 575 && touch.y <= 690) {
       appState.setMode("todo");
       lastPortraitMode = paperdesk::AppState::Mode::kTodo;
       portraitPage = PortraitPage::kTodo;
       todoPage = 0;
+      invalidateView();
+    } else if (touch.x >= 55 && touch.x <= 485 && touch.y >= 720 && touch.y <= 835) {
+      portraitPage = PortraitPage::kSettings;
+      settingsConfirmation = SettingsConfirmation::kNone;
+      invalidateView();
+    }
+    return;
+  }
+
+  if (portraitPage == PortraitPage::kSettings) {
+    if (settingsConfirmation != SettingsConfirmation::kNone) {
+      if (touch.y >= 610 && touch.y <= 715 && touch.x >= 55 && touch.x <= 245) {
+        settingsConfirmation = SettingsConfirmation::kNone;
+        invalidateView();
+      } else if (touch.y >= 610 && touch.y <= 715 && touch.x >= 295 && touch.x <= 485) {
+        if (settingsConfirmation == SettingsConfirmation::kRestart) {
+          delay(200);
+          ESP.restart();
+        } else {
+          M5.Display.waitDisplay();
+          delay(250);
+          M5.Power.powerOff();
+        }
+      }
+      return;
+    }
+
+    const auto& settings = appState.settings();
+    if (touch.y >= 130 && touch.y <= 240) {
+      appState.updateSettings(settings.wifiPowerSave == 0,
+                              settings.webManagementEnabled != 0,
+                              settings.autoLockMinutes);
+      invalidateView();
+    } else if (touch.y >= 270 && touch.y <= 380) {
+      appState.updateSettings(settings.wifiPowerSave != 0,
+                              settings.webManagementEnabled == 0,
+                              settings.autoLockMinutes);
+      invalidateView();
+    } else if (touch.y >= 410 && touch.y <= 520) {
+      constexpr uint16_t intervals[] = {0, 5, 15, 30, 60, 120};
+      size_t next = 0;
+      for (size_t i = 0; i < sizeof(intervals) / sizeof(intervals[0]); ++i) {
+        if (intervals[i] == settings.autoLockMinutes) {
+          next = (i + 1) % (sizeof(intervals) / sizeof(intervals[0]));
+          break;
+        }
+      }
+      appState.updateSettings(settings.wifiPowerSave != 0,
+                              settings.webManagementEnabled != 0, intervals[next]);
+      invalidateView();
+    } else if (touch.y >= 560 && touch.y <= 660) {
+      enterLockScreen();
+    } else if (touch.y >= 700 && touch.y <= 800 && touch.x >= 45 && touch.x <= 255) {
+      settingsConfirmation = SettingsConfirmation::kRestart;
+      invalidateView();
+    } else if (touch.y >= 700 && touch.y <= 800 && touch.x >= 285 && touch.x <= 495) {
+      settingsConfirmation = SettingsConfirmation::kPowerOff;
       invalidateView();
     }
     return;

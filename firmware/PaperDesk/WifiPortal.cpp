@@ -80,6 +80,7 @@ void WifiPortal::begin() {
   }
   // NetworkServer needs the ESP-IDF TCP/IP stack created by WiFi.mode().
   server_.begin();
+  serverRunning_ = true;
 }
 
 void WifiPortal::configureRoutes() {
@@ -96,7 +97,6 @@ void WifiPortal::configureRoutes() {
   server_.on("/api/mode", HTTP_POST, [this] { handleMode(); });
   server_.on("/api/badge", HTTP_POST, [this] { handleBadge(); });
   server_.on("/api/weather", HTTP_POST, [this] { handleWeather(); });
-  server_.on("/api/device/settings", HTTP_POST, [this] { handleDeviceSettings(); });
   server_.on("/api/device/lock", HTTP_POST, [this] { handleDeviceLock(); });
   server_.on("/api/device/restart", HTTP_POST, [this] { handleDeviceRestart(); });
   server_.on("/api/device/power-off", HTTP_POST, [this] { handleDevicePowerOff(); });
@@ -146,6 +146,7 @@ void WifiPortal::startSavedConnection() {
   connectionStartedMs_ = millis();
   WiFi.mode(WIFI_STA);
   WiFi.setSleep(false);
+  appliedWifiPowerSave_ = 0;
   Serial.printf("[wifi] connecting saved network: %s\n", savedSsid_.c_str());
   WiFi.begin(savedSsid_.c_str(), savedPassword_.c_str());
 }
@@ -163,6 +164,7 @@ void WifiPortal::startConnection(const String& ssid, const String& password, boo
   if (portalActive_) WiFi.mode(WIFI_AP_STA);
   else WiFi.mode(WIFI_STA);
   WiFi.setSleep(false);
+  appliedWifiPowerSave_ = 0;
   WiFi.begin(ssid.c_str(), password.c_str());
 }
 
@@ -178,6 +180,7 @@ void WifiPortal::startPortal(const String& reason) {
   delay(100);
   WiFi.mode(WIFI_AP_STA);
   WiFi.setSleep(false);
+  appliedWifiPowerSave_ = 0;
   WiFi.softAPConfig(kPortalIp, kPortalGateway, kPortalMask);
   apSsid_ = makeApSsid();
   WiFi.softAP(apSsid_.c_str(), kAdminPassword);
@@ -196,15 +199,14 @@ void WifiPortal::finishConnection() {
   pendingFromPortal_ = false;
   pendingSsid_ = "";
   pendingPassword_ = "";
-  MDNS.end();
-  MDNS.begin(kHostname);
-  WiFi.setSleep(appState_ ? appState_->settings().wifiPowerSave != 0 : true);
-  Serial.printf("[wifi] connected: %s, http://%s/\n",
-                WiFi.SSID().c_str(), WiFi.localIP().toString().c_str());
+  syncNetworkServices();
+  Serial.printf("[wifi] connected: %s, IP=%s, web=%s\n",
+                WiFi.SSID().c_str(), WiFi.localIP().toString().c_str(),
+                serverRunning_ ? "enabled" : "disabled");
 }
 
 void WifiPortal::update() {
-  server_.handleClient();
+  if (serverRunning_) server_.handleClient();
   if (portalActive_) dnsServer_.processNextRequest();
 
   if (restartScheduled_ && static_cast<int32_t>(millis() - restartAtMs_) >= 0) {
@@ -224,6 +226,7 @@ void WifiPortal::update() {
       WiFi.softAPdisconnect(true);
       portalActive_ = false;
       WiFi.mode(WIFI_STA);
+      appliedWifiPowerSave_ = 2;
     }
 
     if (WiFi.status() != WL_CONNECTED) {
@@ -231,6 +234,46 @@ void WifiPortal::update() {
       connectionStartedMs_ = millis();
       pendingFromPortal_ = false;
       WiFi.reconnect();
+    }
+  }
+  syncNetworkServices();
+}
+
+void WifiPortal::syncNetworkServices() {
+  const bool connectedNow = state_ == State::kConnected && WiFi.status() == WL_CONNECTED;
+  const bool webEnabled = !appState_ || appState_->settings().webManagementEnabled != 0;
+  // Provisioning and connection diagnostics always need the local server. Once
+  // online, the user's on-device switch owns whether HTTP and mDNS keep running.
+  const bool shouldRunServer = portalActive_ || !connectedNow || webEnabled;
+
+  if (shouldRunServer && !serverRunning_) {
+    server_.begin();
+    serverRunning_ = true;
+    Serial.println("[web] management server enabled");
+  } else if (!shouldRunServer && serverRunning_) {
+    if (mdnsRunning_) {
+      MDNS.end();
+      mdnsRunning_ = false;
+    }
+    server_.stop();
+    serverRunning_ = false;
+    Serial.println("[web] management server disabled");
+  }
+
+  const bool shouldRunMdns = connectedNow && webEnabled && serverRunning_ && !portalActive_;
+  if (shouldRunMdns && !mdnsRunning_) {
+    mdnsRunning_ = MDNS.begin(kHostname);
+  } else if (!shouldRunMdns && mdnsRunning_) {
+    MDNS.end();
+    mdnsRunning_ = false;
+  }
+
+  if (connectedNow) {
+    const uint8_t desiredPowerSave =
+        appState_ && appState_->settings().wifiPowerSave == 0 ? 0 : 1;
+    if (desiredPowerSave != appliedWifiPowerSave_) {
+      WiFi.setSleep(desiredPowerSave != 0);
+      appliedWifiPowerSave_ = desiredPowerSave;
     }
   }
 }
@@ -350,6 +393,8 @@ void WifiPortal::handleApp() {
   body += appState_->todoRevision();
   body += F(",\"settings\":{\"wifiPowerSave\":");
   body += appState_->settings().wifiPowerSave ? F("true") : F("false");
+  body += F(",\"webManagementEnabled\":");
+  body += appState_->settings().webManagementEnabled ? F("true") : F("false");
   body += F(",\"autoLockMinutes\":");
   body += appState_->settings().autoLockMinutes;
   body += F("}");
@@ -401,19 +446,6 @@ void WifiPortal::handleWeather() {
     return;
   }
   contentChanged_ = true;
-  server_.send(200, "application/json", "{\"ok\":true}");
-}
-
-void WifiPortal::handleDeviceSettings() {
-  if (!requireAuthorized()) return;
-  const bool wifiPowerSave = server_.arg("wifiPowerSave") != "0";
-  const long requestedMinutes = server_.arg("autoLockMinutes").toInt();
-  if (!appState_ || requestedMinutes < 0 || requestedMinutes > 240 ||
-      !appState_->updateSettings(wifiPowerSave, static_cast<uint16_t>(requestedMinutes))) {
-    server_.send(400, "text/plain; charset=utf-8", "省电设置无效或保存失败。");
-    return;
-  }
-  WiFi.setSleep(wifiPowerSave);
   server_.send(200, "application/json", "{\"ok\":true}");
 }
 

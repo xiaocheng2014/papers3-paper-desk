@@ -23,6 +23,8 @@ class ClockView {
   void showBadge(const AppState& state);
   void showTodo(const AppState& state, size_t page);
   void showTodoConfirmation(const AppState::Todo& item);
+  void showDeviceSettings(const AppState::DeviceSettings& settings, const String& ip);
+  void showDeviceConfirmation(const char* title, const char* detail);
   void showLockScreen(const char* line1, const char* line2, const char* author);
   void showWifiResetProgress(uint8_t percent);
 

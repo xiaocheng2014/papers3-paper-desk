@@ -32,7 +32,7 @@ class AppState {
 
   struct DeviceSettings {
     uint8_t wifiPowerSave;
-    uint8_t reserved;
+    uint8_t webManagementEnabled;
     uint16_t autoLockMinutes;
   };
 
@@ -52,7 +52,8 @@ class AppState {
   bool deleteTodo(uint32_t id);
   bool moveTodo(uint32_t id, int direction);
   bool setTodoCompleted(uint32_t id, bool completed);
-  bool updateSettings(bool wifiPowerSave, uint16_t autoLockMinutes);
+  bool updateSettings(bool wifiPowerSave, bool webManagementEnabled,
+                      uint16_t autoLockMinutes);
   int findTodo(uint32_t id) const;
   bool saveTodoTemplate(uint32_t id, const String& name, const String& items);
   bool deleteTodoTemplate(uint32_t id);
@@ -99,7 +100,7 @@ class AppState {
   static void copyText(char* target, size_t capacity, const String& value);
 
   static constexpr uint32_t kMagic = 0x5044534B;  // PDSK
-  static constexpr uint16_t kVersion = 6;
+  static constexpr uint16_t kVersion = 7;
   static constexpr uint32_t kTodoMagic = 0x544F444F;  // TODO
   static constexpr uint16_t kTodoVersion = 1;
   static constexpr char kPhotoPath[] = "/badge.gray";

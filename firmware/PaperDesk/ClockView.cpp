@@ -496,41 +496,122 @@ void ClockView::showPortraitMenu(AppState::Mode selected) {
   M5.Display.setFont(&fonts::efontCN_24);
   M5.Display.drawString("点击卡片进入", 270, 100);
 
-  M5.Display.drawRoundRect(55, 155, 430, 150, 18, TFT_BLACK);
+  M5.Display.drawRoundRect(55, 140, 430, 115, 18, TFT_BLACK);
   M5.Display.setFont(&fonts::efontCN_24_b);
-  M5.Display.setTextSize(2);
-  M5.Display.drawString("时钟", 270, 176);
   M5.Display.setTextSize(1);
-  M5.Display.setFont(&fonts::efontCN_24);
-  M5.Display.drawString("天气 · 时间 · 趋势", 270, 252);
+  M5.Display.drawString("时钟", 270, 155);
+  M5.Display.setTextSize(1);
+  M5.Display.setFont(&fonts::efontCN_16);
+  M5.Display.drawString("天气 · 时间 · 趋势", 270, 211);
 
-  M5.Display.drawRoundRect(55, 345, 430, 150, 18, TFT_BLACK);
+  M5.Display.drawRoundRect(55, 285, 430, 115, 18, TFT_BLACK);
   M5.Display.setFont(&fonts::efontCN_24_b);
-  M5.Display.setTextSize(2);
-  M5.Display.drawString("识字", 270, 366);
+  M5.Display.drawString("识字", 270, 300);
   M5.Display.setTextSize(1);
-  M5.Display.setFont(&fonts::efontCN_24);
-  M5.Display.drawString("一年级上 · 100 字", 270, 442);
+  M5.Display.setFont(&fonts::efontCN_16);
+  M5.Display.drawString("一年级上 · 100 字", 270, 356);
 
   const bool badgeSelected = selected == AppState::Mode::kBadge;
-  M5.Display.drawRoundRect(55, 535, 430, 150, 18, TFT_BLACK);
-  if (badgeSelected) M5.Display.drawRoundRect(61, 541, 418, 138, 14, TFT_BLACK);
+  M5.Display.drawRoundRect(55, 430, 430, 115, 18, TFT_BLACK);
+  if (badgeSelected) M5.Display.drawRoundRect(61, 436, 418, 103, 14, TFT_BLACK);
   M5.Display.setFont(&fonts::efontCN_24_b);
-  M5.Display.setTextSize(2);
-  M5.Display.drawString("工牌", 270, 556);
+  M5.Display.drawString("工牌", 270, 445);
   M5.Display.setTextSize(1);
-  M5.Display.setFont(&fonts::efontCN_24);
-  M5.Display.drawString("姓名 · 职务 · 可选照片", 270, 632);
+  M5.Display.setFont(&fonts::efontCN_16);
+  M5.Display.drawString("姓名 · 职务 · 可选照片", 270, 501);
 
   const bool todoSelected = selected == AppState::Mode::kTodo;
-  M5.Display.drawRoundRect(55, 725, 430, 150, 18, TFT_BLACK);
-  if (todoSelected) M5.Display.drawRoundRect(61, 731, 418, 138, 14, TFT_BLACK);
+  M5.Display.drawRoundRect(55, 575, 430, 115, 18, TFT_BLACK);
+  if (todoSelected) M5.Display.drawRoundRect(61, 581, 418, 103, 14, TFT_BLACK);
+  M5.Display.setFont(&fonts::efontCN_24_b);
+  M5.Display.drawString("Todo", 270, 590);
+  M5.Display.setTextSize(1);
+  M5.Display.setFont(&fonts::efontCN_16);
+  M5.Display.drawString("查看并完成待办", 270, 646);
+
+  M5.Display.drawRoundRect(55, 720, 430, 115, 18, TFT_BLACK);
+  M5.Display.setFont(&fonts::efontCN_24_b);
+  M5.Display.drawString("设备设置", 270, 735);
+  M5.Display.setFont(&fonts::efontCN_16);
+  M5.Display.drawString("省电 · Web · 锁屏与电源", 270, 791);
+  endFrame();
+}
+
+void ClockView::showDeviceSettings(const AppState::DeviceSettings& settings, const String& ip) {
+  beginFrame(true);
+  M5.Display.setTextColor(TFT_BLACK, TFT_WHITE);
+  M5.Display.setTextDatum(textdatum_t::top_center);
   M5.Display.setFont(&fonts::efontCN_24_b);
   M5.Display.setTextSize(2);
-  M5.Display.drawString("Todo", 270, 746);
+  M5.Display.drawString("设备设置", 270, 28);
+  M5.Display.setTextSize(1);
+  M5.Display.setFont(&fonts::efontCN_16);
+  M5.Display.drawString("点击设置项切换", 270, 94);
+
+  auto drawSetting = [](int y, const char* title, const String& detail, bool enabled) {
+    M5.Display.drawRoundRect(45, y, 450, 110, 16, TFT_BLACK);
+    M5.Display.setTextDatum(textdatum_t::top_left);
+    M5.Display.setFont(&fonts::efontCN_24_b);
+    M5.Display.drawString(title, 70, y + 18);
+    M5.Display.setFont(&fonts::efontCN_16);
+    M5.Display.drawString(detail, 70, y + 65);
+    M5.Display.setTextDatum(textdatum_t::middle_center);
+    M5.Display.drawRoundRect(386, y + 24, 82, 54, 27, TFT_BLACK);
+    if (enabled) {
+      M5.Display.fillCircle(441, y + 51, 20, TFT_BLACK);
+      M5.Display.setTextColor(TFT_WHITE, TFT_BLACK);
+      M5.Display.setFont(&fonts::Font2);
+      M5.Display.drawString("ON", 441, y + 51);
+      M5.Display.setTextColor(TFT_BLACK, TFT_WHITE);
+    } else {
+      M5.Display.drawCircle(413, y + 51, 20, TFT_BLACK);
+      M5.Display.setFont(&fonts::Font2);
+      M5.Display.drawString("OFF", 413, y + 51);
+    }
+  };
+
+  drawSetting(130, "Wi-Fi 省电", "降低联网待机功耗", settings.wifiPowerSave != 0);
+  const String webDetail = settings.webManagementEnabled
+                               ? (ip.isEmpty() ? String("管理后台已开启") : String("管理地址：") + ip)
+                               : String("HTTP 与 paperdesk.local 已关闭");
+  drawSetting(270, "Web 管理", webDetail, settings.webManagementEnabled != 0);
+
+  String autoLockDetail;
+  if (settings.autoLockMinutes == 0) autoLockDetail = "不自动锁屏";
+  else if (settings.autoLockMinutes < 60) autoLockDetail = String(settings.autoLockMinutes) + " 分钟无操作后锁屏";
+  else autoLockDetail = String(settings.autoLockMinutes / 60) + " 小时无操作后锁屏";
+  drawSetting(410, "自动锁屏", autoLockDetail, settings.autoLockMinutes != 0);
+
+  M5.Display.setTextDatum(textdatum_t::middle_center);
+  M5.Display.setFont(&fonts::efontCN_24_b);
+  M5.Display.drawRoundRect(45, 560, 450, 100, 16, TFT_BLACK);
+  M5.Display.drawString("立即锁屏", 270, 610);
+  M5.Display.drawRoundRect(45, 700, 210, 100, 16, TFT_BLACK);
+  M5.Display.drawString("重启", 150, 750);
+  M5.Display.drawRoundRect(285, 700, 210, 100, 16, TFT_BLACK);
+  M5.Display.drawString("关机", 390, 750);
+
+  M5.Display.setTextDatum(textdatum_t::top_center);
+  M5.Display.setFont(&fonts::efontCN_16);
+  M5.Display.drawString("向右滑动返回主菜单", 270, 858);
+  endFrame();
+}
+
+void ClockView::showDeviceConfirmation(const char* title, const char* detail) {
+  beginFrame(true);
+  M5.Display.setTextColor(TFT_BLACK, TFT_WHITE);
+  M5.Display.setTextDatum(textdatum_t::top_center);
+  M5.Display.setFont(&fonts::efontCN_24_b);
+  M5.Display.setTextSize(2);
+  M5.Display.drawString(title, 270, 190);
   M5.Display.setTextSize(1);
   M5.Display.setFont(&fonts::efontCN_24);
-  M5.Display.drawString("查看并完成待办", 270, 822);
+  M5.Display.drawString(detail, 270, 340);
+  M5.Display.drawRoundRect(55, 610, 190, 105, 16, TFT_BLACK);
+  M5.Display.drawString("取消", 150, 645);
+  M5.Display.fillRoundRect(295, 610, 190, 105, 16, TFT_BLACK);
+  M5.Display.setTextColor(TFT_WHITE, TFT_BLACK);
+  M5.Display.drawString("确认", 390, 645);
   endFrame();
 }
 

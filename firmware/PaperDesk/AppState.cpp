@@ -41,6 +41,7 @@ void AppState::setDefaults() {
   data_.version = kVersion;
   data_.mode = static_cast<uint8_t>(Mode::kBadge);
   data_.settings.wifiPowerSave = 1;
+  data_.settings.webManagementEnabled = 1;
   data_.settings.autoLockMinutes = 0;
   todos_.clear();
   nextTodoId_ = 1;
@@ -55,8 +56,15 @@ bool AppState::load() {
   if (length == sizeof(data_)) {
     const size_t read = preferences_.getBytes("state", &data_, sizeof(data_));
     preferences_.end();
-    return read == sizeof(data_) && data_.magic == kMagic && data_.version == kVersion &&
-           data_.mode <= static_cast<uint8_t>(Mode::kTodo);
+    if (read != sizeof(data_) || data_.magic != kMagic ||
+        data_.mode > static_cast<uint8_t>(Mode::kTodo)) return false;
+    if (data_.version == kVersion) return true;
+    if (data_.version == 6) {
+      data_.version = kVersion;
+      data_.settings.webManagementEnabled = 1;
+      return save();
+    }
+    return false;
   }
 
   struct LegacyDataV5 {
@@ -403,10 +411,12 @@ bool AppState::setTodoCompleted(uint32_t id, bool completed) {
   return false;
 }
 
-bool AppState::updateSettings(bool wifiPowerSave, uint16_t autoLockMinutes) {
+bool AppState::updateSettings(bool wifiPowerSave, bool webManagementEnabled,
+                              uint16_t autoLockMinutes) {
   if (autoLockMinutes > 240) return false;
   const DeviceSettings previous = data_.settings;
   data_.settings.wifiPowerSave = wifiPowerSave ? 1 : 0;
+  data_.settings.webManagementEnabled = webManagementEnabled ? 1 : 0;
   data_.settings.autoLockMinutes = autoLockMinutes;
   if (save()) return true;
   data_.settings = previous;
