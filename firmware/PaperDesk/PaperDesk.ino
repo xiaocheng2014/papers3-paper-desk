@@ -1,5 +1,6 @@
 #include <M5Unified.h>
 #include <WiFi.h>
+#include <esp_system.h>
 #include <esp_sntp.h>
 #include <time.h>
 
@@ -29,6 +30,25 @@ size_t literacyIndex = 0;
 size_t todoPage = 0;
 constexpr size_t kTodosPerPage = 10;
 
+struct LockQuote {
+  const char* line1;
+  const char* line2;
+  const char* author;
+};
+
+constexpr LockQuote kLockQuotes[] = {
+    {"千里之行", "始于足下", "——《道德经》"},
+    {"天行健", "君子以自强不息", "——《周易》"},
+    {"锲而不舍", "金石可镂", "——《荀子》"},
+    {"路漫漫其修远兮", "吾将上下而求索", "—— 屈原"},
+    {"知不足而奋进", "望远山而前行", "—— 与君共勉"},
+    {"心有所向", "日复一日必有精进", "—— 与君共勉"},
+    {"不积跬步", "无以至千里", "——《荀子》"},
+    {"博观而约取", "厚积而薄发", "—— 苏轼"},
+    {"长风破浪会有时", "直挂云帆济沧海", "—— 李白"},
+    {"纸上得来终觉浅", "绝知此事要躬行", "—— 陆游"},
+};
+
 enum class ScreenOrientation : uint8_t { kLandscape, kPortrait };
 enum class PortraitPage : uint8_t { kMenu, kClock, kLiteracy, kBadge, kTodo };
 
@@ -43,8 +63,42 @@ uint32_t lastOrientationSwitchMs = 0;
 float accumulatedRotationDegrees = 0.0f;
 bool gyroRotationArmed = true;
 bool firstOrientationLogged = false;
+bool locked = true;
+size_t lockQuoteIndex = 0;
+uint32_t lastActivityMs = 0;
+PortraitPage pageBeforeLock = PortraitPage::kMenu;
+ScreenOrientation orientationBeforeLock = ScreenOrientation::kPortrait;
 
 void invalidateView();
+
+void drawLockScreen() {
+  const auto& quote = kLockQuotes[lockQuoteIndex % (sizeof(kLockQuotes) / sizeof(kLockQuotes[0]))];
+  clockView.setPortrait(true);
+  clockView.showLockScreen(quote.line1, quote.line2, quote.author);
+  viewDirty = false;
+  clockDrawn = false;
+}
+
+void enterLockScreen() {
+  if (!locked) {
+    pageBeforeLock = portraitPage;
+    orientationBeforeLock = screenOrientation;
+  }
+  locked = true;
+  pendingTodoId = 0;
+  lockQuoteIndex = esp_random() % (sizeof(kLockQuotes) / sizeof(kLockQuotes[0]));
+  screenOrientation = ScreenOrientation::kPortrait;
+  drawLockScreen();
+}
+
+void unlockScreen() {
+  locked = false;
+  portraitPage = pageBeforeLock;
+  screenOrientation = orientationBeforeLock;
+  clockView.setPortrait(screenOrientation == ScreenOrientation::kPortrait);
+  lastActivityMs = millis();
+  invalidateView();
+}
 
 bool rtcHasUsableTime() {
   if (!M5.Rtc.isEnabled()) return false;
@@ -98,6 +152,11 @@ void renderForWifiState(bool force = false) {
       clockDrawn = false;
       break;
     case paperdesk::WifiPortal::State::kConnected:
+      if (locked) {
+        screenOrientation = ScreenOrientation::kPortrait;
+        drawLockScreen();
+        break;
+      }
       portraitPage = PortraitPage::kMenu;
       screenOrientation = ScreenOrientation::kPortrait;
       clockView.setPortrait(true);
@@ -106,6 +165,27 @@ void renderForWifiState(bool force = false) {
     default:
       break;
   }
+}
+
+void updateLockTouch() {
+  const auto touch = M5.Touch.getDetail();
+  if (touch.isPressed()) lastActivityMs = millis();
+  if (!touch.wasFlicked()) return;
+  const int distanceX = touch.distanceX();
+  const int startX = touch.x - distanceX;
+  const int startY = touch.y - touch.distanceY();
+  if (distanceX > 260 && abs(distanceX) > abs(touch.distanceY()) &&
+      startX >= 35 && startX <= 155 && startY >= 735 && startY <= 890) {
+    unlockScreen();
+  }
+}
+
+void updateAutoLock() {
+  if (locked || !wifiPortal.connected()) return;
+  const uint16_t minutes = appState.settings().autoLockMinutes;
+  if (minutes == 0) return;
+  const uint32_t timeoutMs = static_cast<uint32_t>(minutes) * 60000UL;
+  if (millis() - lastActivityMs >= timeoutMs) enterLockScreen();
 }
 
 void updateClock() {
@@ -248,6 +328,7 @@ void updateApplicationView() {
 
 void updateTouch() {
   const auto touch = M5.Touch.getDetail();
+  if (touch.isPressed() || touch.wasClicked() || touch.wasFlicked()) lastActivityMs = millis();
   const bool inResetCorner = touch.isPressed() && touch.x < 150 && touch.y < 110;
   if (!inResetCorner) {
     if (resetTouchStartedMs != 0 && lastResetProgress != 0) invalidateView();
@@ -294,7 +375,9 @@ void updateTouch() {
   if (!touch.wasClicked()) return;
 
   if (portraitPage == PortraitPage::kMenu) {
-    if (touch.x >= 55 && touch.x <= 485 && touch.y >= 155 && touch.y <= 305) {
+    if (touch.x >= 420 && touch.y <= 120) {
+      enterLockScreen();
+    } else if (touch.x >= 55 && touch.x <= 485 && touch.y >= 155 && touch.y <= 305) {
       portraitPage = PortraitPage::kClock;
       screenOrientation = ScreenOrientation::kLandscape;
       clockView.setPortrait(false);
@@ -379,6 +462,8 @@ void setup() {
   wifiPortal.attachState(&appState);
   wifiPortal.attachWeather(&weatherService);
   wifiPortal.begin();
+  lockQuoteIndex = esp_random() % (sizeof(kLockQuotes) / sizeof(kLockQuotes[0]));
+  lastActivityMs = millis();
   renderForWifiState(true);
   Serial.printf("[paperdesk] display initialized; IMU=%s; speaker and microphone disabled\n",
                 M5.Imu.isEnabled() ? "ready" : "unavailable");
@@ -387,12 +472,26 @@ void setup() {
 void loop() {
   M5.update();
   wifiPortal.update();
+  if (wifiPortal.consumePowerOffRequest()) {
+    M5.Display.waitDisplay();
+    delay(250);
+    M5.Power.powerOff();
+    return;
+  }
+  if (wifiPortal.consumeLockRequest()) enterLockScreen();
+  if (!locked && M5.BtnPWR.wasClicked()) enterLockScreen();
   updateNtp();
   renderForWifiState();
   weatherService.update(wifiPortal.connected());
   if (weatherService.consumeChanged()) invalidateView();
+  if (locked) {
+    if (wifiPortal.connected()) updateLockTouch();
+    delay(20);
+    return;
+  }
   updateApplicationView();
   updateClock();
   updateTouch();
-  delay(5);
+  updateAutoLock();
+  delay(20);
 }

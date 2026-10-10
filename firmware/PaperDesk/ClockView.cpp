@@ -489,6 +489,10 @@ void ClockView::showPortraitMenu(AppState::Mode selected) {
   M5.Display.setTextSize(2);
   M5.Display.drawString("主菜单", 270, 28);
   M5.Display.setTextSize(1);
+  M5.Display.setFont(&fonts::efontCN_16);
+  M5.Display.drawRoundRect(435, 28, 78, 54, 12, TFT_BLACK);
+  M5.Display.drawString("锁屏", 474, 45);
+  M5.Display.setTextSize(1);
   M5.Display.setFont(&fonts::efontCN_24);
   M5.Display.drawString("点击卡片进入", 270, 100);
 
@@ -527,6 +531,39 @@ void ClockView::showPortraitMenu(AppState::Mode selected) {
   M5.Display.setTextSize(1);
   M5.Display.setFont(&fonts::efontCN_24);
   M5.Display.drawString("查看并完成待办", 270, 822);
+  endFrame();
+}
+
+void ClockView::showLockScreen(const char* line1, const char* line2, const char* author) {
+  beginFrame(true);
+  M5.Display.setTextColor(TFT_BLACK, TFT_WHITE);
+  M5.Display.setTextDatum(textdatum_t::top_center);
+  M5.Display.setFont(&fonts::FreeSerifItalic24pt7b);
+  M5.Display.setTextSize(1);
+  M5.Display.drawString("PaperDesk", 270, 48);
+  M5.Display.drawFastHLine(70, 118, 400, TFT_BLACK);
+
+  M5.Display.setFont(&fonts::efontCN_24_b);
+  M5.Display.setTextSize(2);
+  M5.Display.setTextDatum(textdatum_t::middle_center);
+  M5.Display.drawString(line1, 270, 310);
+  if (line2 && line2[0]) M5.Display.drawString(line2, 270, 390);
+  M5.Display.setTextSize(1);
+  M5.Display.setFont(&fonts::efontCN_24);
+  M5.Display.drawString(author, 270, 490);
+
+  constexpr int trackX = 48;
+  constexpr int trackY = 760;
+  constexpr int trackWidth = 444;
+  constexpr int trackHeight = 104;
+  M5.Display.drawRoundRect(trackX, trackY, trackWidth, trackHeight, 20, TFT_BLACK);
+  M5.Display.fillRoundRect(trackX + 10, trackY + 10, 84, 84, 15, TFT_BLACK);
+  M5.Display.setTextColor(TFT_WHITE, TFT_BLACK);
+  M5.Display.setFont(&fonts::Font4);
+  M5.Display.drawString(">>", trackX + 52, trackY + 52);
+  M5.Display.setTextColor(TFT_BLACK, TFT_WHITE);
+  M5.Display.setFont(&fonts::efontCN_24);
+  M5.Display.drawString("向右滑动解锁", 315, trackY + 52);
   endFrame();
 }
 

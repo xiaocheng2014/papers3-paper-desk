@@ -30,6 +30,12 @@ class AppState {
     uint8_t completed;
   };
 
+  struct DeviceSettings {
+    uint8_t wifiPowerSave;
+    uint8_t reserved;
+    uint16_t autoLockMinutes;
+  };
+
   bool begin();
   Mode mode() const { return static_cast<Mode>(data_.mode); }
   const Badge& badge() const { return data_.badge; }
@@ -37,6 +43,7 @@ class AppState {
   size_t todoCount() const { return todos_.size(); }
   uint32_t todoRevision() const { return todoRevision_; }
   bool hasPhoto() const { return photoReady_; }
+  const DeviceSettings& settings() const { return data_.settings; }
 
   bool setMode(const String& value);
   bool updateBadge(const String& name, const String& role, const String& contact,
@@ -45,6 +52,7 @@ class AppState {
   bool deleteTodo(uint32_t id);
   bool moveTodo(uint32_t id, int direction);
   bool setTodoCompleted(uint32_t id, bool completed);
+  bool updateSettings(bool wifiPowerSave, uint16_t autoLockMinutes);
   int findTodo(uint32_t id) const;
   bool saveTodoTemplate(uint32_t id, const String& name, const String& items);
   bool deleteTodoTemplate(uint32_t id);
@@ -67,6 +75,7 @@ class AppState {
     uint16_t version;
     uint8_t mode;
     Badge badge;
+    DeviceSettings settings;
   };
 
   struct TodoFileHeader {
@@ -90,7 +99,7 @@ class AppState {
   static void copyText(char* target, size_t capacity, const String& value);
 
   static constexpr uint32_t kMagic = 0x5044534B;  // PDSK
-  static constexpr uint16_t kVersion = 5;
+  static constexpr uint16_t kVersion = 6;
   static constexpr uint32_t kTodoMagic = 0x544F444F;  // TODO
   static constexpr uint16_t kTodoVersion = 1;
   static constexpr char kPhotoPath[] = "/badge.gray";

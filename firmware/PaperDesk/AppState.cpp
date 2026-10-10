@@ -40,6 +40,8 @@ void AppState::setDefaults() {
   data_.magic = kMagic;
   data_.version = kVersion;
   data_.mode = static_cast<uint8_t>(Mode::kBadge);
+  data_.settings.wifiPowerSave = 1;
+  data_.settings.autoLockMinutes = 0;
   todos_.clear();
   nextTodoId_ = 1;
   copyText(data_.badge.name, sizeof(data_.badge.name), "PaperDesk");
@@ -55,6 +57,24 @@ bool AppState::load() {
     preferences_.end();
     return read == sizeof(data_) && data_.magic == kMagic && data_.version == kVersion &&
            data_.mode <= static_cast<uint8_t>(Mode::kTodo);
+  }
+
+  struct LegacyDataV5 {
+    uint32_t magic;
+    uint16_t version;
+    uint8_t mode;
+    Badge badge;
+  };
+  if (length == sizeof(LegacyDataV5)) {
+    LegacyDataV5 legacy{};
+    const size_t read = preferences_.getBytes("state", &legacy, sizeof(legacy));
+    preferences_.end();
+    if (read != sizeof(legacy) || legacy.magic != kMagic || legacy.version != 5 ||
+        legacy.mode > static_cast<uint8_t>(Mode::kTodo)) return false;
+    setDefaults();
+    data_.mode = legacy.mode;
+    data_.badge = legacy.badge;
+    return save();
   }
 
   struct LegacyDataV4 {
@@ -380,6 +400,16 @@ bool AppState::setTodoCompleted(uint32_t id, bool completed) {
     return true;
   }
   todos_[index].completed = previous;
+  return false;
+}
+
+bool AppState::updateSettings(bool wifiPowerSave, uint16_t autoLockMinutes) {
+  if (autoLockMinutes > 240) return false;
+  const DeviceSettings previous = data_.settings;
+  data_.settings.wifiPowerSave = wifiPowerSave ? 1 : 0;
+  data_.settings.autoLockMinutes = autoLockMinutes;
+  if (save()) return true;
+  data_.settings = previous;
   return false;
 }
 

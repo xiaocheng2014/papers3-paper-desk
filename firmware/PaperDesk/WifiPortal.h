@@ -31,6 +31,16 @@ class WifiPortal {
     contentChanged_ = false;
     return changed;
   }
+  bool consumeLockRequest() {
+    const bool requested = lockRequested_;
+    lockRequested_ = false;
+    return requested;
+  }
+  bool consumePowerOffRequest() {
+    const bool requested = powerOffRequested_;
+    powerOffRequested_ = false;
+    return requested;
+  }
 
   State state() const { return state_; }
   bool connected() const { return state_ == State::kConnected && WiFi.status() == WL_CONNECTED; }
@@ -64,6 +74,10 @@ class WifiPortal {
   void handleMode();
   void handleBadge();
   void handleWeather();
+  void handleDeviceSettings();
+  void handleDeviceLock();
+  void handleDeviceRestart();
+  void handleDevicePowerOff();
   void handleTodos();
   void handleTodoAdd();
   void handleTodoDelete();
@@ -107,6 +121,8 @@ class WifiPortal {
   bool restartScheduled_ = false;
   bool clearCredentialsOnRestart_ = false;
   bool contentChanged_ = false;
+  bool lockRequested_ = false;
+  bool powerOffRequested_ = false;
   bool photoUploadOk_ = false;
   size_t photoUploadBytes_ = 0;
   String photoUploadError_;

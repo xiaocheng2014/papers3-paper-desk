@@ -65,6 +65,8 @@ update();setInterval(update,1500);
 void WifiPortal::begin() {
   WiFi.persistent(false);
   WiFi.setAutoReconnect(true);
+  // Association and captive-portal setup are kept fully awake. Power saving
+  // is enabled only after the station has obtained an address.
   WiFi.setSleep(false);
   WiFi.setHostname(kHostname);
   configureRoutes();
@@ -94,6 +96,10 @@ void WifiPortal::configureRoutes() {
   server_.on("/api/mode", HTTP_POST, [this] { handleMode(); });
   server_.on("/api/badge", HTTP_POST, [this] { handleBadge(); });
   server_.on("/api/weather", HTTP_POST, [this] { handleWeather(); });
+  server_.on("/api/device/settings", HTTP_POST, [this] { handleDeviceSettings(); });
+  server_.on("/api/device/lock", HTTP_POST, [this] { handleDeviceLock(); });
+  server_.on("/api/device/restart", HTTP_POST, [this] { handleDeviceRestart(); });
+  server_.on("/api/device/power-off", HTTP_POST, [this] { handleDevicePowerOff(); });
   server_.on("/api/todos", HTTP_GET, [this] { handleTodos(); });
   server_.on("/api/todos/add", HTTP_POST, [this] { handleTodoAdd(); });
   server_.on("/api/todos/delete", HTTP_POST, [this] { handleTodoDelete(); });
@@ -139,6 +145,7 @@ void WifiPortal::startSavedConnection() {
   state_ = State::kConnecting;
   connectionStartedMs_ = millis();
   WiFi.mode(WIFI_STA);
+  WiFi.setSleep(false);
   Serial.printf("[wifi] connecting saved network: %s\n", savedSsid_.c_str());
   WiFi.begin(savedSsid_.c_str(), savedPassword_.c_str());
 }
@@ -155,6 +162,7 @@ void WifiPortal::startConnection(const String& ssid, const String& password, boo
   delay(100);
   if (portalActive_) WiFi.mode(WIFI_AP_STA);
   else WiFi.mode(WIFI_STA);
+  WiFi.setSleep(false);
   WiFi.begin(ssid.c_str(), password.c_str());
 }
 
@@ -169,6 +177,7 @@ void WifiPortal::startPortal(const String& reason) {
   WiFi.disconnect(false, false);
   delay(100);
   WiFi.mode(WIFI_AP_STA);
+  WiFi.setSleep(false);
   WiFi.softAPConfig(kPortalIp, kPortalGateway, kPortalMask);
   apSsid_ = makeApSsid();
   WiFi.softAP(apSsid_.c_str(), kAdminPassword);
@@ -189,6 +198,7 @@ void WifiPortal::finishConnection() {
   pendingPassword_ = "";
   MDNS.end();
   MDNS.begin(kHostname);
+  WiFi.setSleep(appState_ ? appState_->settings().wifiPowerSave != 0 : true);
   Serial.printf("[wifi] connected: %s, http://%s/\n",
                 WiFi.SSID().c_str(), WiFi.localIP().toString().c_str());
 }
@@ -338,6 +348,11 @@ void WifiPortal::handleApp() {
   body += appState_->hasPhoto() ? F("true") : F("false");
   body += F("},\"todoRevision\":");
   body += appState_->todoRevision();
+  body += F(",\"settings\":{\"wifiPowerSave\":");
+  body += appState_->settings().wifiPowerSave ? F("true") : F("false");
+  body += F(",\"autoLockMinutes\":");
+  body += appState_->settings().autoLockMinutes;
+  body += F("}");
   body += F(",\"weather\":{");
   if (weatherService_) {
     const auto& weather = weatherService_->snapshot();
@@ -387,6 +402,37 @@ void WifiPortal::handleWeather() {
   }
   contentChanged_ = true;
   server_.send(200, "application/json", "{\"ok\":true}");
+}
+
+void WifiPortal::handleDeviceSettings() {
+  if (!requireAuthorized()) return;
+  const bool wifiPowerSave = server_.arg("wifiPowerSave") != "0";
+  const long requestedMinutes = server_.arg("autoLockMinutes").toInt();
+  if (!appState_ || requestedMinutes < 0 || requestedMinutes > 240 ||
+      !appState_->updateSettings(wifiPowerSave, static_cast<uint16_t>(requestedMinutes))) {
+    server_.send(400, "text/plain; charset=utf-8", "省电设置无效或保存失败。");
+    return;
+  }
+  WiFi.setSleep(wifiPowerSave);
+  server_.send(200, "application/json", "{\"ok\":true}");
+}
+
+void WifiPortal::handleDeviceLock() {
+  if (!requireAuthorized()) return;
+  lockRequested_ = true;
+  server_.send(200, "application/json", "{\"ok\":true}");
+}
+
+void WifiPortal::handleDeviceRestart() {
+  if (!requireAuthorized()) return;
+  server_.send(202, "application/json", "{\"restarting\":true}");
+  scheduleRestart();
+}
+
+void WifiPortal::handleDevicePowerOff() {
+  if (!requireAuthorized()) return;
+  powerOffRequested_ = true;
+  server_.send(202, "application/json", "{\"poweringOff\":true}");
 }
 
 void WifiPortal::handleTodos() {
