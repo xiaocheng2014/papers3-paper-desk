@@ -7,7 +7,7 @@ namespace paperdesk {
 inline constexpr char kProductName[] = "PaperDesk";
 inline constexpr char kHostname[] = "paperdesk";
 inline constexpr char kPreferencesNamespace[] = "paperdesk";
-inline constexpr char kAdminPassword[] = "159357hui";
+inline constexpr char kAdminPassword[] = "xiaocheng2014";
 inline constexpr char kTimeZone[] = "CST-8";
 inline constexpr char kNtpServer1[] = "ntp.aliyun.com";
 inline constexpr char kNtpServer2[] = "ntp1.aliyun.com";
