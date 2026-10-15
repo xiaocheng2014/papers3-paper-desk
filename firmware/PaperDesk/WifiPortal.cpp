@@ -190,6 +190,7 @@ void WifiPortal::startSavedConnection() {
     WiFi.softAPdisconnect(true);
   }
   portalActive_ = false;
+  portalShutdownPending_ = false;
   pendingFromPortal_ = false;
   lastError_ = "";
   credentialIndex_ = 0;
@@ -231,6 +232,7 @@ void WifiPortal::startPortal(const String& reason) {
   lastError_ = reason;
   state_ = reason.isEmpty() ? State::kProvisioning : State::kConnectionFailed;
   portalActive_ = true;
+  portalShutdownPending_ = false;
   pendingFromPortal_ = false;
   pendingSsid_ = "";
   pendingPassword_ = "";
@@ -249,7 +251,30 @@ void WifiPortal::startPortal(const String& reason) {
 }
 
 void WifiPortal::startProvisioning() {
-  startPortal();
+  if (portalActive_) return;
+  if (!connected()) {
+    startPortal();
+    syncNetworkServices();
+    return;
+  }
+
+  // Keep the current station association alive while adding the provisioning
+  // access point. The station is switched only after a new network is submitted.
+  lastError_ = "";
+  portalActive_ = true;
+  portalShutdownPending_ = false;
+  pendingFromPortal_ = false;
+  pendingSsid_ = "";
+  pendingPassword_ = "";
+  WiFi.mode(WIFI_AP_STA);
+  WiFi.setSleep(false);
+  appliedWifiPowerSave_ = 0;
+  WiFi.softAPConfig(kPortalIp, kPortalGateway, kPortalMask);
+  apSsid_ = makeApSsid();
+  WiFi.softAP(apSsid_.c_str(), kAdminPassword);
+  dnsServer_.start(kDnsPort, "*", kPortalIp);
+  Serial.printf("[wifi] provisioning AP added; station remains on %s (%s)\n",
+                WiFi.SSID().c_str(), WiFi.localIP().toString().c_str());
   syncNetworkServices();
 }
 
@@ -263,6 +288,7 @@ String WifiPortal::stationSsid() const {
 void WifiPortal::finishConnection() {
   state_ = State::kConnected;
   connectedMs_ = millis();
+  portalShutdownPending_ = portalActive_;
   lastError_ = "";
   if (pendingFromPortal_) {
     saveCredentials(pendingSsid_, pendingPassword_);
@@ -308,10 +334,12 @@ void WifiPortal::update() {
       }
     }
   } else if (state_ == State::kConnected) {
-    if (portalActive_ && millis() - connectedMs_ >= kPortalShutdownDelayMs) {
+    if (portalActive_ && portalShutdownPending_ &&
+        millis() - connectedMs_ >= kPortalShutdownDelayMs) {
       dnsServer_.stop();
       WiFi.softAPdisconnect(true);
       portalActive_ = false;
+      portalShutdownPending_ = false;
       WiFi.mode(WIFI_STA);
       appliedWifiPowerSave_ = 2;
     }
@@ -347,7 +375,7 @@ void WifiPortal::syncNetworkServices() {
     Serial.println("[web] management server disabled");
   }
 
-  const bool shouldRunMdns = connectedNow && webEnabled && serverRunning_ && !portalActive_;
+  const bool shouldRunMdns = connectedNow && webEnabled && serverRunning_;
   if (shouldRunMdns && !mdnsRunning_) {
     mdnsRunning_ = MDNS.begin(kHostname);
   } else if (!shouldRunMdns && mdnsRunning_) {

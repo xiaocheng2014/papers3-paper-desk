@@ -126,6 +126,7 @@ class WifiPortal {
   uint32_t restartAtMs_ = 0;
   bool pendingFromPortal_ = false;
   bool portalActive_ = false;
+  bool portalShutdownPending_ = false;
   bool routesConfigured_ = false;
   bool serverRunning_ = false;
   bool mdnsRunning_ = false;
