@@ -250,8 +250,11 @@ void WifiPortal::startPortal(const String& reason) {
                 apSsid_.c_str(), kPortalIp.toString().c_str());
 }
 
-void WifiPortal::startProvisioning() {
-  if (portalActive_) return;
+void WifiPortal::toggleProvisioning() {
+  if (portalActive_) {
+    stopPortal();
+    return;
+  }
   if (!connected()) {
     startPortal();
     syncNetworkServices();
@@ -276,6 +279,31 @@ void WifiPortal::startProvisioning() {
   Serial.printf("[wifi] provisioning AP added; station remains on %s (%s)\n",
                 WiFi.SSID().c_str(), WiFi.localIP().toString().c_str());
   syncNetworkServices();
+}
+
+void WifiPortal::stopPortal() {
+  if (!portalActive_) return;
+  dnsServer_.stop();
+  WiFi.softAPdisconnect(true);
+  portalActive_ = false;
+  portalShutdownPending_ = false;
+  pendingFromPortal_ = false;
+  pendingSsid_ = "";
+  pendingPassword_ = "";
+  WiFi.mode(WIFI_STA);
+
+  if (WiFi.status() == WL_CONNECTED) {
+    state_ = State::kConnected;
+    lastError_ = "";
+    appliedWifiPowerSave_ = 2;
+  } else if (!credentials_.empty()) {
+    startSavedConnection();
+  } else {
+    state_ = State::kIdle;
+    lastError_ = "当前离线；可在设备设置中再次开启 Wi-Fi 配网。";
+  }
+  syncNetworkServices();
+  Serial.println("[wifi] provisioning AP stopped");
 }
 
 String WifiPortal::stationSsid() const {

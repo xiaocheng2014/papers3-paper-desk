@@ -25,7 +25,7 @@ class WifiPortal {
   void begin();
   void update();
   void clearCredentials();
-  void startProvisioning();
+  void toggleProvisioning();
   void attachState(AppState* state) { appState_ = state; }
   void attachWeather(WeatherService* weather) { weatherService_ = weather; }
   bool consumeContentChanged() {
@@ -64,6 +64,7 @@ class WifiPortal {
   void connectSavedCredential(size_t index);
   void startConnection(const String& ssid, const String& password, bool fromPortal);
   void startPortal(const String& reason = String());
+  void stopPortal();
   void finishConnection();
   void syncNetworkServices();
   void saveCredentials(const String& ssid, const String& password);

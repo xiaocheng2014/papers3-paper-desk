@@ -451,7 +451,7 @@ void updateTouch() {
                               settings.webManagementEnabled != 0, intervals[next]);
       invalidateView();
     } else if (touch.y >= 440 && touch.y <= 545) {
-      wifiPortal.startProvisioning();
+      wifiPortal.toggleProvisioning();
       invalidateView();
     } else if (touch.y >= 575 && touch.y <= 663) {
       enterLockScreen();

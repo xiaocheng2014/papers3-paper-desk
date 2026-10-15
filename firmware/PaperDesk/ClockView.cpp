@@ -589,7 +589,7 @@ void ClockView::showDeviceSettings(const AppState::DeviceSettings& settings, con
   M5.Display.setTextDatum(textdatum_t::top_center);
   M5.Display.setFont(&fonts::efontCN_24_b);
   M5.Display.drawRoundRect(45, 440, 450, 105, 16, TFT_BLACK);
-  M5.Display.drawString(provisioning ? "配网热点已开启" : "开启 Wi-Fi 配网", 270, 452);
+  M5.Display.drawString(provisioning ? "关闭 Wi-Fi 配网" : "开启 Wi-Fi 配网", 270, 452);
   M5.Display.setFont(&fonts::efontCN_16);
   String provisioningDetail;
   if (provisioning) {
