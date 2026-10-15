@@ -19,11 +19,18 @@ paperdesk::WeatherService weatherService;
 
 paperdesk::WifiPortal::State lastWifiState = paperdesk::WifiPortal::State::kIdle;
 uint32_t lastClockRefreshMs = 0;
+uint32_t lastClockNetworkRefreshMs = 0;
+uint32_t clockNetworkStartedMs = 0;
 uint32_t resetTouchStartedMs = 0;
 uint8_t lastResetProgress = 0;
 bool clockDrawn = false;
 bool ntpConfigured = false;
 bool ntpSynced = false;
+bool clockNetworkRefreshActive = false;
+bool clockWeatherUpdateComplete = false;
+bool clockNtpRequestStarted = false;
+bool clockNtpUpdateComplete = false;
+bool wasClockVisible = false;
 bool viewDirty = true;
 uint32_t pendingTodoId = 0;
 size_t literacyIndex = 0;
@@ -75,6 +82,37 @@ SettingsConfirmation settingsConfirmation = SettingsConfirmation::kNone;
 
 void invalidateView();
 
+bool disableImu() {
+  // M5Unified 0.2.10 does not implement IMU_Class::sleep() for BMI270.
+  // PaperS3 does not use motion input, so disable every BMI270 sensor block
+  // and enable its advanced power-save bit directly.
+  constexpr uint8_t kBmi270Addresses[] = {0x68, 0x69};
+  constexpr uint8_t kChipIdRegister = 0x00;
+  constexpr uint8_t kBmi270ChipId = 0x24;
+  constexpr uint8_t kPowerConfigRegister = 0x7C;
+  constexpr uint8_t kPowerControlRegister = 0x7D;
+  constexpr uint32_t kI2cFrequency = 400000;
+
+  for (const uint8_t address : kBmi270Addresses) {
+    if (M5.In_I2C.readRegister8(address, kChipIdRegister, kI2cFrequency) != kBmi270ChipId) {
+      continue;
+    }
+    const bool sensorsDisabled =
+        M5.In_I2C.writeRegister8(address, kPowerControlRegister, 0x00, kI2cFrequency);
+    delay(1);
+    const bool advancedPowerSaveEnabled =
+        M5.In_I2C.writeRegister8(address, kPowerConfigRegister, 0x01, kI2cFrequency);
+    delay(1);
+    const uint8_t powerControl =
+        M5.In_I2C.readRegister8(address, kPowerControlRegister, kI2cFrequency);
+    const uint8_t powerConfig =
+        M5.In_I2C.readRegister8(address, kPowerConfigRegister, kI2cFrequency);
+    return sensorsDisabled && advancedPowerSaveEnabled && (powerControl & 0x0F) == 0 &&
+           (powerConfig & 0x01) != 0;
+  }
+  return false;
+}
+
 void drawLockScreen() {
   const auto& quote = kLockQuotes[lockQuoteIndex % (sizeof(kLockQuotes) / sizeof(kLockQuotes[0]))];
   clockView.setPortrait(true);
@@ -124,14 +162,77 @@ void updateNtp() {
     configTzTime(paperdesk::kTimeZone, paperdesk::kNtpServer1,
                  paperdesk::kNtpServer2, paperdesk::kNtpServer3);
     ntpConfigured = true;
+    if (clockNetworkRefreshActive) clockNtpRequestStarted = true;
+  } else if (clockNetworkRefreshActive && !clockNtpRequestStarted) {
+    sntp_set_sync_status(SNTP_SYNC_STATUS_RESET);
+    sntp_restart();
+    clockNtpRequestStarted = true;
   }
 
-  if (!ntpSynced && sntp_get_sync_status() == SNTP_SYNC_STATUS_COMPLETED) {
+  const bool needsRtcUpdate = !ntpSynced ||
+                              (clockNetworkRefreshActive && clockNtpRequestStarted &&
+                               !clockNtpUpdateComplete);
+  if (needsRtcUpdate && sntp_get_sync_status() == SNTP_SYNC_STATUS_COMPLETED) {
     const time_t now = time(nullptr);
     if (now > 1704067200) {
       M5.Rtc.setDateTime(gmtime(&now));
       ntpSynced = true;
+      if (clockNetworkRefreshActive) clockNtpUpdateComplete = true;
       clockDrawn = false;
+      Serial.println("[clock] NTP synchronized and RTC updated");
+    }
+  }
+}
+
+void beginClockNetworkRefresh() {
+  clockNetworkRefreshActive = true;
+  clockWeatherUpdateComplete = false;
+  clockNtpRequestStarted = false;
+  clockNtpUpdateComplete = false;
+  clockNetworkStartedMs = millis();
+  weatherService.requestRefresh();
+  wifiPortal.setStationEnabled(true);
+  Serial.println("[power] clock network refresh started");
+}
+
+void finishClockNetworkRefresh() {
+  clockNetworkRefreshActive = false;
+  lastClockNetworkRefreshMs = millis();
+  if (appState.settings().webManagementEnabled == 0 && !wifiPortal.provisioning()) {
+    wifiPortal.setStationEnabled(false);
+  }
+  Serial.println("[power] clock network refresh finished");
+}
+
+void updateNetworkPolicy(bool weatherChanged) {
+  const uint32_t nowMs = millis();
+  const bool webEnabled = appState.settings().webManagementEnabled != 0;
+  const bool clockVisible = !locked && portraitPage == PortraitPage::kClock;
+
+  if (webEnabled) wifiPortal.setStationEnabled(true);
+
+  if (clockVisible && !wasClockVisible) beginClockNetworkRefresh();
+  wasClockVisible = clockVisible;
+
+  if (!clockVisible) {
+    clockNetworkRefreshActive = false;
+    if (!webEnabled && !wifiPortal.provisioning()) wifiPortal.setStationEnabled(false);
+    return;
+  }
+
+  if (!clockNetworkRefreshActive &&
+      (lastClockNetworkRefreshMs == 0 ||
+       nowMs - lastClockNetworkRefreshMs >= paperdesk::kClockNetworkRefreshMs)) {
+    beginClockNetworkRefresh();
+  }
+
+  if (clockNetworkRefreshActive && weatherChanged) clockWeatherUpdateComplete = true;
+
+  if (clockNetworkRefreshActive) {
+    const uint32_t elapsedMs = nowMs - clockNetworkStartedMs;
+    const bool refreshComplete = clockWeatherUpdateComplete && clockNtpUpdateComplete;
+    if (refreshComplete || elapsedMs >= paperdesk::kClockNetworkTimeoutMs) {
+      finishClockNetworkRefresh();
     }
   }
 }
@@ -142,8 +243,9 @@ void renderForWifiState(bool force = false) {
   lastWifiState = state;
   // Networking is optional. A connection change updates status-bearing pages,
   // but never replaces the current local screen or blocks touch interaction.
-  if (!locked && (portraitPage == PortraitPage::kClock ||
-                  portraitPage == PortraitPage::kSettings)) {
+  // Clock refreshes itself when NTP or weather data changes. Redrawing for
+  // each short connect/disconnect transition would waste an e-paper refresh.
+  if (!locked && portraitPage == PortraitPage::kSettings) {
     invalidateView();
   }
 }
@@ -566,9 +668,11 @@ void setup() {
   auto config = M5.config();
   config.internal_spk = false;
   config.internal_mic = false;
+  config.internal_imu = false;
   config.led_brightness = 0;
   M5.begin(config);
   M5.Speaker.end();
+  const bool imuSleeping = disableImu();
 
   clockView.begin();
   appState.begin();
@@ -584,7 +688,7 @@ void setup() {
   screenOrientation = ScreenOrientation::kPortrait;
   drawLockScreen();
   Serial.printf("[paperdesk] display initialized; IMU=%s; speaker and microphone disabled\n",
-                M5.Imu.isEnabled() ? "ready" : "unavailable");
+                imuSleeping ? "sleeping" : "sleep request failed");
 }
 
 void loop() {
@@ -601,7 +705,9 @@ void loop() {
   updateNtp();
   renderForWifiState();
   weatherService.update(wifiPortal.connected());
-  if (weatherService.consumeChanged()) invalidateView();
+  const bool weatherChanged = weatherService.consumeChanged();
+  if (weatherChanged) invalidateView();
+  updateNetworkPolicy(weatherChanged);
   if (locked) {
     updateLockTouch();
     delay(20);

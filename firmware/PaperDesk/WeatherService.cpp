@@ -10,7 +10,7 @@ namespace paperdesk {
 namespace {
 
 constexpr char kWeatherPreferences[] = "paperdesk_wx";
-constexpr uint32_t kWeatherRefreshMs = 30UL * 60UL * 1000UL;
+constexpr uint32_t kWeatherRefreshMs = 60UL * 60UL * 1000UL;
 constexpr uint32_t kWeatherRetryMs = 5UL * 60UL * 1000UL;
 constexpr uint32_t kLocationRetryMs = 30UL * 60UL * 1000UL;
 

@@ -78,13 +78,51 @@ void WifiPortal::begin() {
   server_.collectHeaders(protectedHeaders, 1);
 
   if (loadCredentials()) {
-    startSavedConnection();
+    const bool keepOnline = appState_ && appState_->settings().webManagementEnabled != 0;
+    if (keepOnline) {
+      startSavedConnection();
+    } else {
+      stationEnabled_ = false;
+      state_ = State::kIdle;
+      lastError_ = "Wi-Fi 已按省电策略关闭。";
+      WiFi.mode(WIFI_OFF);
+    }
   } else {
     startPortal();
   }
-  // NetworkServer needs the ESP-IDF TCP/IP stack created by WiFi.mode().
-  server_.begin();
-  serverRunning_ = true;
+  if (portalActive_ || stationEnabled_) {
+    // NetworkServer needs the ESP-IDF TCP/IP stack created by WiFi.mode().
+    server_.begin();
+    serverRunning_ = true;
+  }
+}
+
+void WifiPortal::setStationEnabled(bool enabled) {
+  if (enabled) {
+    if (stationEnabled_) return;
+    stationEnabled_ = true;
+    if (!portalActive_ && !connected() && state_ != State::kConnecting) {
+      startSavedConnection();
+    }
+    return;
+  }
+
+  if (!stationEnabled_ || portalActive_) return;
+  stationEnabled_ = false;
+  pendingFromPortal_ = false;
+  pendingSsid_ = "";
+  pendingPassword_ = "";
+  if (mdnsRunning_) {
+    MDNS.end();
+    mdnsRunning_ = false;
+  }
+  WiFi.disconnect(false, false);
+  WiFi.mode(WIFI_OFF);
+  state_ = State::kIdle;
+  appliedWifiPowerSave_ = 2;
+  lastError_ = "Wi-Fi 已按省电策略关闭。";
+  syncNetworkServices();
+  Serial.println("[wifi] station radio disabled by power policy");
 }
 
 void WifiPortal::configureRoutes() {
@@ -180,6 +218,7 @@ bool WifiPortal::persistCredentials() {
 }
 
 void WifiPortal::startSavedConnection() {
+  stationEnabled_ = true;
   if (credentials_.empty()) {
     state_ = State::kIdle;
     lastError_ = "当前离线；可在设备设置中开启 Wi-Fi 配网。";
@@ -212,6 +251,7 @@ void WifiPortal::connectSavedCredential(size_t index) {
 }
 
 void WifiPortal::startConnection(const String& ssid, const String& password, bool fromPortal) {
+  stationEnabled_ = true;
   pendingSsid_ = ssid;
   pendingPassword_ = password;
   pendingFromPortal_ = fromPortal;
@@ -296,11 +336,12 @@ void WifiPortal::stopPortal() {
     state_ = State::kConnected;
     lastError_ = "";
     appliedWifiPowerSave_ = 2;
-  } else if (!credentials_.empty()) {
+  } else if (stationEnabled_ && !credentials_.empty()) {
     startSavedConnection();
   } else {
     state_ = State::kIdle;
     lastError_ = "当前离线；可在设备设置中再次开启 Wi-Fi 配网。";
+    WiFi.mode(WIFI_OFF);
   }
   syncNetworkServices();
   Serial.println("[wifi] provisioning AP stopped");
@@ -314,6 +355,7 @@ String WifiPortal::stationSsid() const {
 }
 
 void WifiPortal::finishConnection() {
+  stationEnabled_ = true;
   state_ = State::kConnected;
   connectedMs_ = millis();
   portalShutdownPending_ = portalActive_;
@@ -372,10 +414,11 @@ void WifiPortal::update() {
       appliedWifiPowerSave_ = 2;
     }
 
-    if (WiFi.status() != WL_CONNECTED) {
+    if (stationEnabled_ && WiFi.status() != WL_CONNECTED) {
       startSavedConnection();
     }
-  } else if (state_ == State::kIdle && !portalActive_ && !credentials_.empty() &&
+  } else if (state_ == State::kIdle && stationEnabled_ && !portalActive_ &&
+             !credentials_.empty() &&
              static_cast<int32_t>(millis() - offlineRetryAtMs_) >= 0) {
     startSavedConnection();
   }
@@ -428,6 +471,7 @@ void WifiPortal::clearCredentials() {
   }
   credentials_.clear();
   credentialIndex_ = 0;
+  stationEnabled_ = false;
   pendingSsid_ = "";
   pendingPassword_ = "";
   WiFi.disconnect(true, true);

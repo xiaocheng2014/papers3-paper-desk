@@ -26,6 +26,7 @@ class WifiPortal {
   void update();
   void clearCredentials();
   void toggleProvisioning();
+  void setStationEnabled(bool enabled);
   void attachState(AppState* state) { appState_ = state; }
   void attachWeather(WeatherService* weather) { weatherService_ = weather; }
   bool consumeContentChanged() {
@@ -47,6 +48,7 @@ class WifiPortal {
   State state() const { return state_; }
   bool connected() const { return state_ == State::kConnected && WiFi.status() == WL_CONNECTED; }
   bool provisioning() const { return portalActive_; }
+  bool stationEnabled() const { return stationEnabled_; }
   size_t savedNetworkCount() const { return credentials_.size(); }
   const String& apSsid() const { return apSsid_; }
   String stationSsid() const;
@@ -126,6 +128,7 @@ class WifiPortal {
   uint32_t offlineRetryAtMs_ = 0;
   uint32_t restartAtMs_ = 0;
   bool pendingFromPortal_ = false;
+  bool stationEnabled_ = false;
   bool portalActive_ = false;
   bool portalShutdownPending_ = false;
   bool routesConfigured_ = false;

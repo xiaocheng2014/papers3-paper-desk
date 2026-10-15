@@ -16,6 +16,8 @@ inline constexpr char kNtpServer3[] = "pool.ntp.org";
 inline constexpr uint32_t kWifiConnectTimeoutMs = 8000;
 inline constexpr uint32_t kPortalShutdownDelayMs = 8000;
 inline constexpr uint32_t kClockRefreshMs = 60000;
+inline constexpr uint32_t kClockNetworkRefreshMs = 60UL * 60UL * 1000UL;
+inline constexpr uint32_t kClockNetworkTimeoutMs = 45000;
 inline constexpr uint32_t kWifiResetHoldMs = 5000;
 inline constexpr uint16_t kQualityRefreshMinutes = 30;
 
