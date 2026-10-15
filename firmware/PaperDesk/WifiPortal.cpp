@@ -3,6 +3,9 @@
 #include <ESPmDNS.h>
 #include <esp_mac.h>
 
+#include <algorithm>
+#include <cstring>
+
 #include "AppConfig.h"
 #include "AppState.h"
 #include "ManagementPage.h"
@@ -12,6 +15,7 @@ namespace paperdesk {
 namespace {
 
 constexpr byte kDnsPort = 53;
+constexpr uint32_t kOfflineRetryIntervalMs = 5UL * 60UL * 1000UL;
 const IPAddress kPortalIp(192, 168, 4, 1);
 const IPAddress kPortalGateway(192, 168, 4, 1);
 const IPAddress kPortalMask(255, 255, 255, 0);
@@ -42,7 +46,7 @@ const char kSetupPage[] PROGMEM = R"HTML(
     <h2>连接家庭 Wi-Fi</h2>
     <label for="ssid">网络</label><select id="ssid"><option>正在扫描…</option></select>
     <label for="password">密码</label><input id="password" type="password" maxlength="63" autocomplete="current-password" placeholder="开放网络可留空">
-    <button id="connect">保存并连接</button><small>凭据仅保存在当前设备中，连接成功后才会写入。</small>
+    <button id="connect">保存并连接</button><small>连接成功后加入已保存网络，不会删除其他 Wi-Fi。</small>
   </section>
   <section id="dashboard" class="card" hidden>
     <h2>设备管理</h2><div class="modes"><div class="mode">时钟<br><small>当前版本</small></div><div class="mode">工牌<br><small>下一里程碑</small></div><div class="mode">Todo<br><small>下一里程碑</small></div></div>
@@ -125,33 +129,85 @@ void WifiPortal::configureRoutes() {
 }
 
 bool WifiPortal::loadCredentials() {
+  credentials_.clear();
   if (!preferences_.begin(kPreferencesNamespace, true)) return false;
-  savedSsid_ = preferences_.getString("ssid", "");
-  savedPassword_ = preferences_.getString("password", "");
+  const size_t blobSize = preferences_.getBytesLength("wifi_list");
+  if (blobSize > 0 && blobSize % sizeof(WifiCredential) == 0 &&
+      blobSize <= sizeof(WifiCredential) * 32) {
+    credentials_.resize(blobSize / sizeof(WifiCredential));
+    if (preferences_.getBytes("wifi_list", credentials_.data(), blobSize) != blobSize) {
+      credentials_.clear();
+    }
+  }
+  const String legacySsid = preferences_.getString("ssid", "");
+  const String legacyPassword = preferences_.getString("password", "");
   preferences_.end();
-  return !savedSsid_.isEmpty();
+
+  // Upgrade the old one-network format without making the user configure it again.
+  if (credentials_.empty() && !legacySsid.isEmpty()) {
+    saveCredentials(legacySsid, legacyPassword);
+  }
+  return !credentials_.empty();
 }
 
 void WifiPortal::saveCredentials(const String& ssid, const String& password) {
-  if (!preferences_.begin(kPreferencesNamespace, false)) return;
-  preferences_.putString("ssid", ssid);
-  preferences_.putString("password", password);
+  WifiCredential credential{};
+  strlcpy(credential.ssid, ssid.c_str(), sizeof(credential.ssid));
+  strlcpy(credential.password, password.c_str(), sizeof(credential.password));
+  const auto found = std::find_if(credentials_.begin(), credentials_.end(),
+                                  [&ssid](const WifiCredential& item) {
+                                    return ssid == item.ssid;
+                                  });
+  if (found != credentials_.end()) credentials_.erase(found);
+  credentials_.insert(credentials_.begin(), credential);
+  credentialIndex_ = 0;
+  persistCredentials();
+}
+
+bool WifiPortal::persistCredentials() {
+  if (!preferences_.begin(kPreferencesNamespace, false)) return false;
+  const size_t byteCount = credentials_.size() * sizeof(WifiCredential);
+  const bool ok = byteCount == 0
+                      ? preferences_.remove("wifi_list")
+                      : preferences_.putBytes("wifi_list", credentials_.data(), byteCount) ==
+                            byteCount;
+  if (ok) {
+    preferences_.remove("ssid");
+    preferences_.remove("password");
+  }
   preferences_.end();
-  savedSsid_ = ssid;
-  savedPassword_ = password;
+  return ok;
 }
 
 void WifiPortal::startSavedConnection() {
+  if (credentials_.empty()) {
+    state_ = State::kIdle;
+    lastError_ = "当前离线；可在设备设置中开启 Wi-Fi 配网。";
+    return;
+  }
+  if (portalActive_) {
+    dnsServer_.stop();
+    WiFi.softAPdisconnect(true);
+  }
   portalActive_ = false;
   pendingFromPortal_ = false;
   lastError_ = "";
+  credentialIndex_ = 0;
+  connectSavedCredential(credentialIndex_);
+}
+
+void WifiPortal::connectSavedCredential(size_t index) {
+  if (index >= credentials_.size()) return;
+  credentialIndex_ = index;
   state_ = State::kConnecting;
   connectionStartedMs_ = millis();
   WiFi.mode(WIFI_STA);
   WiFi.setSleep(false);
   appliedWifiPowerSave_ = 0;
-  Serial.printf("[wifi] connecting saved network: %s\n", savedSsid_.c_str());
-  WiFi.begin(savedSsid_.c_str(), savedPassword_.c_str());
+  Serial.printf("[wifi] trying saved network %u/%u: %s\n",
+                static_cast<unsigned>(index + 1),
+                static_cast<unsigned>(credentials_.size()), credentials_[index].ssid);
+  WiFi.begin(credentials_[index].ssid, credentials_[index].password);
 }
 
 void WifiPortal::startConnection(const String& ssid, const String& password, bool fromPortal) {
@@ -192,12 +248,28 @@ void WifiPortal::startPortal(const String& reason) {
                 apSsid_.c_str(), kPortalIp.toString().c_str());
 }
 
+void WifiPortal::startProvisioning() {
+  startPortal();
+  syncNetworkServices();
+}
+
+String WifiPortal::stationSsid() const {
+  if (connected()) return WiFi.SSID();
+  if (!pendingSsid_.isEmpty()) return pendingSsid_;
+  if (credentialIndex_ < credentials_.size()) return String(credentials_[credentialIndex_].ssid);
+  return String();
+}
+
 void WifiPortal::finishConnection() {
   state_ = State::kConnected;
   connectedMs_ = millis();
   lastError_ = "";
   if (pendingFromPortal_) {
     saveCredentials(pendingSsid_, pendingPassword_);
+  } else if (credentialIndex_ < credentials_.size() && credentialIndex_ != 0) {
+    const String ssid(credentials_[credentialIndex_].ssid);
+    const String password(credentials_[credentialIndex_].password);
+    saveCredentials(ssid, password);
   }
   pendingFromPortal_ = false;
   pendingSsid_ = "";
@@ -221,7 +293,19 @@ void WifiPortal::update() {
     if (WiFi.status() == WL_CONNECTED) {
       finishConnection();
     } else if (millis() - connectionStartedMs_ >= kWifiConnectTimeoutMs) {
-      startPortal("连接失败，请检查 Wi-Fi 名称和密码。");
+      if (pendingFromPortal_) {
+        startPortal("连接失败，请检查 Wi-Fi 名称和密码。已有网络未被删除。");
+      } else if (credentialIndex_ + 1 < credentials_.size()) {
+        WiFi.disconnect(false, false);
+        delay(50);
+        connectSavedCredential(credentialIndex_ + 1);
+      } else {
+        WiFi.disconnect(false, false);
+        state_ = State::kIdle;
+        offlineRetryAtMs_ = millis() + kOfflineRetryIntervalMs;
+        lastError_ = "附近没有已保存的 Wi-Fi，当前离线使用。";
+        Serial.println("[wifi] no saved network available; continuing offline");
+      }
     }
   } else if (state_ == State::kConnected) {
     if (portalActive_ && millis() - connectedMs_ >= kPortalShutdownDelayMs) {
@@ -233,11 +317,11 @@ void WifiPortal::update() {
     }
 
     if (WiFi.status() != WL_CONNECTED) {
-      state_ = State::kConnecting;
-      connectionStartedMs_ = millis();
-      pendingFromPortal_ = false;
-      WiFi.reconnect();
+      startSavedConnection();
     }
+  } else if (state_ == State::kIdle && !portalActive_ && !credentials_.empty() &&
+             static_cast<int32_t>(millis() - offlineRetryAtMs_) >= 0) {
+    startSavedConnection();
   }
   syncNetworkServices();
 }
@@ -247,7 +331,7 @@ void WifiPortal::syncNetworkServices() {
   const bool webEnabled = !appState_ || appState_->settings().webManagementEnabled != 0;
   // Provisioning and connection diagnostics always need the local server. Once
   // online, the user's on-device switch owns whether HTTP and mDNS keep running.
-  const bool shouldRunServer = portalActive_ || !connectedNow || webEnabled;
+  const bool shouldRunServer = portalActive_ || (connectedNow && webEnabled);
 
   if (shouldRunServer && !serverRunning_) {
     server_.begin();
@@ -286,8 +370,10 @@ void WifiPortal::clearCredentials() {
     preferences_.clear();
     preferences_.end();
   }
-  savedSsid_ = "";
-  savedPassword_ = "";
+  credentials_.clear();
+  credentialIndex_ = 0;
+  pendingSsid_ = "";
+  pendingPassword_ = "";
   WiFi.disconnect(true, true);
 }
 
@@ -314,7 +400,9 @@ void WifiPortal::handleStatus() {
   body += jsonEscape(stationIp());
   body += F("\",\"apSsid\":\"");
   body += jsonEscape(portalActive_ ? apSsid_ : String());
-  body += F("\",\"error\":\"");
+  body += F("\",\"savedNetworks\":");
+  body += credentials_.size();
+  body += F(",\"error\":\"");
   body += jsonEscape(lastError_);
   body += F("\"}");
   server_.send(200, "application/json; charset=utf-8", body);

@@ -537,7 +537,10 @@ void ClockView::showPortraitMenu(AppState::Mode selected) {
   endFrame();
 }
 
-void ClockView::showDeviceSettings(const AppState::DeviceSettings& settings, const String& ip) {
+void ClockView::showDeviceSettings(const AppState::DeviceSettings& settings, const String& ip,
+                                   const String& wifiSsid, bool wifiConnected,
+                                   bool provisioning, const String& apSsid,
+                                   size_t savedNetworkCount) {
   beginFrame(true);
   M5.Display.setTextColor(TFT_BLACK, TFT_WHITE);
   M5.Display.setTextDatum(textdatum_t::top_center);
@@ -546,54 +549,61 @@ void ClockView::showDeviceSettings(const AppState::DeviceSettings& settings, con
   M5.Display.drawString("设备设置", 270, 28);
   M5.Display.setTextSize(1);
   M5.Display.setFont(&fonts::efontCN_16);
-  M5.Display.drawString("点击设置项切换", 270, 94);
+  M5.Display.drawString(wifiConnected ? String("已连接：") + wifiSsid : "当前离线可正常使用",
+                        270, 88);
 
   auto drawSetting = [](int y, const char* title, const String& detail, bool enabled) {
-    M5.Display.drawRoundRect(45, y, 450, 110, 16, TFT_BLACK);
+    M5.Display.drawRoundRect(45, y, 450, 90, 16, TFT_BLACK);
     M5.Display.setTextDatum(textdatum_t::top_left);
     M5.Display.setFont(&fonts::efontCN_24_b);
-    M5.Display.drawString(title, 70, y + 18);
+    M5.Display.drawString(title, 70, y + 10);
     M5.Display.setFont(&fonts::efontCN_16);
-    M5.Display.drawString(detail, 70, y + 65);
+    M5.Display.drawString(detail, 70, y + 52);
     M5.Display.setTextDatum(textdatum_t::middle_center);
-    M5.Display.drawRoundRect(386, y + 24, 82, 54, 27, TFT_BLACK);
+    M5.Display.drawRoundRect(386, y + 18, 82, 54, 27, TFT_BLACK);
     if (enabled) {
-      M5.Display.fillCircle(441, y + 51, 20, TFT_BLACK);
+      M5.Display.fillCircle(441, y + 45, 20, TFT_BLACK);
       M5.Display.setTextColor(TFT_WHITE, TFT_BLACK);
       M5.Display.setFont(&fonts::Font2);
-      M5.Display.drawString("ON", 441, y + 51);
+      M5.Display.drawString("ON", 441, y + 45);
       M5.Display.setTextColor(TFT_BLACK, TFT_WHITE);
     } else {
-      M5.Display.drawCircle(413, y + 51, 20, TFT_BLACK);
+      M5.Display.drawCircle(413, y + 45, 20, TFT_BLACK);
       M5.Display.setFont(&fonts::Font2);
-      M5.Display.drawString("OFF", 413, y + 51);
+      M5.Display.drawString("OFF", 413, y + 45);
     }
   };
 
-  drawSetting(130, "Wi-Fi 省电", "降低联网待机功耗", settings.wifiPowerSave != 0);
+  drawSetting(115, "Wi-Fi 省电", "联网时降低待机功耗", settings.wifiPowerSave != 0);
   const String webDetail = settings.webManagementEnabled
-                               ? (ip.isEmpty() ? String("管理后台已开启") : String("管理地址：") + ip)
+                               ? (ip.isEmpty() ? String("联网后可访问管理后台") : String("管理地址：") + ip)
                                : String("HTTP 与 paperdesk.local 已关闭");
-  drawSetting(270, "Web 管理", webDetail, settings.webManagementEnabled != 0);
+  drawSetting(220, "Web 管理", webDetail, settings.webManagementEnabled != 0);
 
   String autoLockDetail;
   if (settings.autoLockMinutes == 0) autoLockDetail = "不自动锁屏";
   else if (settings.autoLockMinutes < 60) autoLockDetail = String(settings.autoLockMinutes) + " 分钟无操作后锁屏";
   else autoLockDetail = String(settings.autoLockMinutes / 60) + " 小时无操作后锁屏";
-  drawSetting(410, "自动锁屏", autoLockDetail, settings.autoLockMinutes != 0);
+  drawSetting(325, "自动锁屏", autoLockDetail, settings.autoLockMinutes != 0);
+
+  M5.Display.setTextDatum(textdatum_t::top_center);
+  M5.Display.setFont(&fonts::efontCN_24_b);
+  M5.Display.drawRoundRect(45, 440, 450, 105, 16, TFT_BLACK);
+  M5.Display.drawString(provisioning ? "配网热点已开启" : "开启 Wi-Fi 配网", 270, 452);
+  M5.Display.setFont(&fonts::efontCN_16);
+  const String provisioningDetail = provisioning
+                                        ? apSsid + " · 密码 " + kAdminPassword
+                                        : String("已保存 ") + savedNetworkCount + " 个网络";
+  M5.Display.drawString(provisioningDetail, 270, 500);
 
   M5.Display.setTextDatum(textdatum_t::middle_center);
   M5.Display.setFont(&fonts::efontCN_24_b);
-  M5.Display.drawRoundRect(45, 560, 450, 100, 16, TFT_BLACK);
-  M5.Display.drawString("立即锁屏", 270, 610);
-  M5.Display.drawRoundRect(45, 700, 210, 100, 16, TFT_BLACK);
-  M5.Display.drawString("重启", 150, 750);
-  M5.Display.drawRoundRect(285, 700, 210, 100, 16, TFT_BLACK);
-  M5.Display.drawString("关机", 390, 750);
-
-  M5.Display.setTextDatum(textdatum_t::top_center);
-  M5.Display.setFont(&fonts::efontCN_16);
-  M5.Display.drawString("向右滑动返回主菜单", 270, 858);
+  M5.Display.drawRoundRect(45, 575, 450, 88, 16, TFT_BLACK);
+  M5.Display.drawString("立即锁屏", 270, 619);
+  M5.Display.drawRoundRect(45, 695, 210, 88, 16, TFT_BLACK);
+  M5.Display.drawString("重启", 150, 739);
+  M5.Display.drawRoundRect(285, 695, 210, 88, 16, TFT_BLACK);
+  M5.Display.drawString("关机", 390, 739);
   endFrame();
 }
 

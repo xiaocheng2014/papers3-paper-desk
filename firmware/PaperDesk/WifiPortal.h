@@ -5,6 +5,7 @@
 #include <Preferences.h>
 #include <WebServer.h>
 #include <WiFi.h>
+#include <vector>
 
 namespace paperdesk {
 
@@ -24,6 +25,7 @@ class WifiPortal {
   void begin();
   void update();
   void clearCredentials();
+  void startProvisioning();
   void attachState(AppState* state) { appState_ = state; }
   void attachWeather(WeatherService* weather) { weatherService_ = weather; }
   bool consumeContentChanged() {
@@ -45,23 +47,27 @@ class WifiPortal {
   State state() const { return state_; }
   bool connected() const { return state_ == State::kConnected && WiFi.status() == WL_CONNECTED; }
   bool provisioning() const { return portalActive_; }
+  size_t savedNetworkCount() const { return credentials_.size(); }
   const String& apSsid() const { return apSsid_; }
-  String stationSsid() const {
-    if (connected()) return WiFi.SSID();
-    if (!pendingSsid_.isEmpty()) return pendingSsid_;
-    return savedSsid_;
-  }
+  String stationSsid() const;
   String stationIp() const { return connected() ? WiFi.localIP().toString() : String(); }
   const String& lastError() const { return lastError_; }
 
  private:
+  struct WifiCredential {
+    char ssid[33];
+    char password[65];
+  };
+
   void configureRoutes();
   void startSavedConnection();
+  void connectSavedCredential(size_t index);
   void startConnection(const String& ssid, const String& password, bool fromPortal);
   void startPortal(const String& reason = String());
   void finishConnection();
   void syncNetworkServices();
   void saveCredentials(const String& ssid, const String& password);
+  bool persistCredentials();
   bool loadCredentials();
   void scheduleRestart();
 
@@ -107,8 +113,8 @@ class WifiPortal {
   WeatherService* weatherService_ = nullptr;
   State state_ = State::kIdle;
 
-  String savedSsid_;
-  String savedPassword_;
+  std::vector<WifiCredential> credentials_;
+  size_t credentialIndex_ = 0;
   String pendingSsid_;
   String pendingPassword_;
   String apSsid_;
@@ -116,6 +122,7 @@ class WifiPortal {
 
   uint32_t connectionStartedMs_ = 0;
   uint32_t connectedMs_ = 0;
+  uint32_t offlineRetryAtMs_ = 0;
   uint32_t restartAtMs_ = 0;
   bool pendingFromPortal_ = false;
   bool portalActive_ = false;

@@ -140,34 +140,11 @@ void renderForWifiState(bool force = false) {
   const auto state = wifiPortal.state();
   if (!force && state == lastWifiState) return;
   lastWifiState = state;
-
-  switch (state) {
-    case paperdesk::WifiPortal::State::kConnecting:
-      clockView.setPortrait(false);
-      screenOrientation = ScreenOrientation::kLandscape;
-      clockView.showConnecting(wifiPortal.stationSsid());
-      clockDrawn = false;
-      break;
-    case paperdesk::WifiPortal::State::kProvisioning:
-    case paperdesk::WifiPortal::State::kConnectionFailed:
-      clockView.setPortrait(false);
-      screenOrientation = ScreenOrientation::kLandscape;
-      clockView.showProvisioning(wifiPortal.apSsid(), wifiPortal.lastError());
-      clockDrawn = false;
-      break;
-    case paperdesk::WifiPortal::State::kConnected:
-      if (locked) {
-        screenOrientation = ScreenOrientation::kPortrait;
-        drawLockScreen();
-        break;
-      }
-      portraitPage = PortraitPage::kMenu;
-      screenOrientation = ScreenOrientation::kPortrait;
-      clockView.setPortrait(true);
-      invalidateView();
-      break;
-    default:
-      break;
+  // Networking is optional. A connection change updates status-bearing pages,
+  // but never replaces the current local screen or blocks touch interaction.
+  if (!locked && (portraitPage == PortraitPage::kClock ||
+                  portraitPage == PortraitPage::kSettings)) {
+    invalidateView();
   }
 }
 
@@ -185,7 +162,7 @@ void updateLockTouch() {
 }
 
 void updateAutoLock() {
-  if (locked || !wifiPortal.connected()) return;
+  if (locked) return;
   const uint16_t minutes = appState.settings().autoLockMinutes;
   if (minutes == 0) return;
   const uint32_t timeoutMs = static_cast<uint32_t>(minutes) * 60000UL;
@@ -193,12 +170,13 @@ void updateAutoLock() {
 }
 
 void updateClock() {
-  if (!wifiPortal.connected() || portraitPage != PortraitPage::kClock) return;
+  if (portraitPage != PortraitPage::kClock) return;
   const uint32_t nowMs = millis();
   if (clockDrawn && nowMs - lastClockRefreshMs < paperdesk::kClockRefreshMs) return;
 
   const time_t now = time(nullptr);
-  clockView.showClock(now, wifiPortal.stationSsid(), wifiPortal.stationIp(), ntpSynced,
+  const String networkName = wifiPortal.connected() ? wifiPortal.stationSsid() : String("离线");
+  clockView.showClock(now, networkName, wifiPortal.stationIp(), ntpSynced,
                       M5.Power.getBatteryLevel(), weatherService.snapshot(), !clockDrawn);
   lastClockRefreshMs = nowMs - (nowMs % paperdesk::kClockRefreshMs);
   clockDrawn = true;
@@ -229,7 +207,7 @@ void applyOrientation(ScreenOrientation detected, const char* source) {
 }
 
 void updateOrientation() {
-  if (!wifiPortal.connected() || !M5.Imu.isEnabled()) return;
+  if (!M5.Imu.isEnabled()) return;
   const uint32_t nowMs = millis();
   const uint32_t elapsedMs = nowMs - lastOrientationSampleMs;
   if (elapsedMs < 100) return;
@@ -295,7 +273,6 @@ void updateOrientation() {
 }
 
 void updateApplicationView() {
-  if (!wifiPortal.connected()) return;
   if (wifiPortal.consumeContentChanged()) {
     pendingTodoId = 0;
     todoClearConfirmation = false;
@@ -339,7 +316,10 @@ void updateApplicationView() {
       } else if (settingsConfirmation == SettingsConfirmation::kPowerOff) {
         clockView.showDeviceConfirmation("确认关机？", "再次开机请按机身侧键");
       } else {
-        clockView.showDeviceSettings(appState.settings(), wifiPortal.stationIp());
+        clockView.showDeviceSettings(appState.settings(), wifiPortal.stationIp(),
+                                     wifiPortal.stationSsid(), wifiPortal.connected(),
+                                     wifiPortal.provisioning(), wifiPortal.apSsid(),
+                                     wifiPortal.savedNetworkCount());
       }
       break;
   }
@@ -369,8 +349,6 @@ void updateTouch() {
     }
     return;
   }
-
-  if (!wifiPortal.connected()) return;
 
   if (portraitPage != PortraitPage::kMenu && touch.wasFlicked() &&
       touch.distanceX() > 80 && abs(touch.distanceX()) > abs(touch.distanceY())) {
@@ -450,17 +428,17 @@ void updateTouch() {
     }
 
     const auto& settings = appState.settings();
-    if (touch.y >= 130 && touch.y <= 240) {
+    if (touch.y >= 115 && touch.y <= 205) {
       appState.updateSettings(settings.wifiPowerSave == 0,
                               settings.webManagementEnabled != 0,
                               settings.autoLockMinutes);
       invalidateView();
-    } else if (touch.y >= 270 && touch.y <= 380) {
+    } else if (touch.y >= 220 && touch.y <= 310) {
       appState.updateSettings(settings.wifiPowerSave != 0,
                               settings.webManagementEnabled == 0,
                               settings.autoLockMinutes);
       invalidateView();
-    } else if (touch.y >= 410 && touch.y <= 520) {
+    } else if (touch.y >= 325 && touch.y <= 415) {
       constexpr uint16_t intervals[] = {0, 5, 15, 30, 60, 120};
       size_t next = 0;
       for (size_t i = 0; i < sizeof(intervals) / sizeof(intervals[0]); ++i) {
@@ -472,12 +450,15 @@ void updateTouch() {
       appState.updateSettings(settings.wifiPowerSave != 0,
                               settings.webManagementEnabled != 0, intervals[next]);
       invalidateView();
-    } else if (touch.y >= 560 && touch.y <= 660) {
+    } else if (touch.y >= 440 && touch.y <= 545) {
+      wifiPortal.startProvisioning();
+      invalidateView();
+    } else if (touch.y >= 575 && touch.y <= 663) {
       enterLockScreen();
-    } else if (touch.y >= 700 && touch.y <= 800 && touch.x >= 45 && touch.x <= 255) {
+    } else if (touch.y >= 695 && touch.y <= 783 && touch.x >= 45 && touch.x <= 255) {
       settingsConfirmation = SettingsConfirmation::kRestart;
       invalidateView();
-    } else if (touch.y >= 700 && touch.y <= 800 && touch.x >= 285 && touch.x <= 495) {
+    } else if (touch.y >= 695 && touch.y <= 783 && touch.x >= 285 && touch.x <= 495) {
       settingsConfirmation = SettingsConfirmation::kPowerOff;
       invalidateView();
     }
@@ -575,7 +556,9 @@ void setup() {
   wifiPortal.begin();
   lockQuoteIndex = esp_random() % (sizeof(kLockQuotes) / sizeof(kLockQuotes[0]));
   lastActivityMs = millis();
-  renderForWifiState(true);
+  lastWifiState = wifiPortal.state();
+  screenOrientation = ScreenOrientation::kPortrait;
+  drawLockScreen();
   Serial.printf("[paperdesk] display initialized; IMU=%s; speaker and microphone disabled\n",
                 M5.Imu.isEnabled() ? "ready" : "unavailable");
 }
@@ -596,7 +579,7 @@ void loop() {
   weatherService.update(wifiPortal.connected());
   if (weatherService.consumeChanged()) invalidateView();
   if (locked) {
-    if (wifiPortal.connected()) updateLockTouch();
+    updateLockTouch();
     delay(20);
     return;
   }
