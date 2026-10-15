@@ -28,6 +28,8 @@ class ClockView {
                           const String& apSsid, size_t savedNetworkCount);
   void showDeviceConfirmation(const char* title, const char* detail);
   void showLockScreen(const char* line1, const char* line2, const char* author);
+  void showLoading(const char* message = "请稍候…");
+  void showPoweredOff();
   void showWifiResetProgress(uint8_t percent);
 
  private:

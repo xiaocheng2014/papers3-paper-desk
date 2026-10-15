@@ -947,6 +947,42 @@ void ClockView::showTodoConfirmation(const AppState::Todo& item) {
   endFrame();
 }
 
+void ClockView::showLoading(const char* message) {
+  M5.Display.waitDisplay();
+  M5.Display.setEpdMode(m5gfx::epd_mode_t::epd_fastest);
+  M5.Display.startWrite();
+  const int boxWidth = min<int>(420, static_cast<int>(M5.Display.width()) - 48);
+  const int boxHeight = 150;
+  const int x = (M5.Display.width() - boxWidth) / 2;
+  const int y = (M5.Display.height() - boxHeight) / 2;
+  M5.Display.fillRoundRect(x, y, boxWidth, boxHeight, 18, TFT_WHITE);
+  M5.Display.drawRoundRect(x, y, boxWidth, boxHeight, 18, TFT_BLACK);
+  M5.Display.setTextColor(TFT_BLACK, TFT_WHITE);
+  M5.Display.setTextDatum(textdatum_t::middle_center);
+  M5.Display.setFont(&fonts::efontCN_24_b);
+  M5.Display.drawString("处理中…", M5.Display.width() / 2, y + 52);
+  M5.Display.setFont(&fonts::efontCN_16);
+  M5.Display.drawString(message, M5.Display.width() / 2, y + 105);
+  M5.Display.endWrite();
+  M5.Display.display();
+  M5.Display.waitDisplay();
+}
+
+void ClockView::showPoweredOff() {
+  beginFrame(true);
+  M5.Display.setTextColor(TFT_BLACK, TFT_WHITE);
+  M5.Display.setTextDatum(textdatum_t::middle_center);
+  M5.Display.setFont(&fonts::efontCN_24_b);
+  M5.Display.setTextSize(2);
+  M5.Display.drawString("已关机", M5.Display.width() / 2, M5.Display.height() / 2 - 55);
+  M5.Display.setTextSize(1);
+  M5.Display.setFont(&fonts::efontCN_24);
+  M5.Display.drawString("按机身侧键重新开机", M5.Display.width() / 2,
+                        M5.Display.height() / 2 + 55);
+  endFrame();
+  M5.Display.waitDisplay();
+}
+
 void ClockView::showWifiResetProgress(uint8_t percent) {
   const int x = 36;
   const int y = 18;

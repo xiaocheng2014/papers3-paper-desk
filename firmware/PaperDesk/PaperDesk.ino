@@ -378,23 +378,28 @@ void updateTouch() {
 
   if (portraitPage == PortraitPage::kMenu) {
     if (touch.x >= 420 && touch.y <= 120) {
+      clockView.showLoading("正在进入锁屏");
       enterLockScreen();
     } else if (touch.x >= 55 && touch.x <= 485 && touch.y >= 140 && touch.y <= 255) {
+      clockView.showLoading("正在打开时钟");
       portraitPage = PortraitPage::kClock;
       screenOrientation = ScreenOrientation::kLandscape;
       clockView.setPortrait(false);
       invalidateView();
     } else if (touch.x >= 55 && touch.x <= 485 && touch.y >= 285 && touch.y <= 400) {
+      clockView.showLoading("正在打开识字");
       portraitPage = PortraitPage::kLiteracy;
       screenOrientation = ScreenOrientation::kLandscape;
       clockView.setPortrait(false);
       invalidateView();
     } else if (touch.x >= 55 && touch.x <= 485 && touch.y >= 430 && touch.y <= 545) {
+      clockView.showLoading("正在打开工牌");
       appState.setMode("badge");
       lastPortraitMode = paperdesk::AppState::Mode::kBadge;
       portraitPage = PortraitPage::kBadge;
       invalidateView();
     } else if (touch.x >= 55 && touch.x <= 485 && touch.y >= 575 && touch.y <= 690) {
+      clockView.showLoading("正在打开 Todo");
       appState.setMode("todo");
       lastPortraitMode = paperdesk::AppState::Mode::kTodo;
       portraitPage = PortraitPage::kTodo;
@@ -402,6 +407,7 @@ void updateTouch() {
       todoClearConfirmation = false;
       invalidateView();
     } else if (touch.x >= 55 && touch.x <= 485 && touch.y >= 720 && touch.y <= 835) {
+      clockView.showLoading("正在打开设备设置");
       portraitPage = PortraitPage::kSettings;
       settingsConfirmation = SettingsConfirmation::kNone;
       invalidateView();
@@ -412,14 +418,16 @@ void updateTouch() {
   if (portraitPage == PortraitPage::kSettings) {
     if (settingsConfirmation != SettingsConfirmation::kNone) {
       if (touch.y >= 610 && touch.y <= 715 && touch.x >= 55 && touch.x <= 245) {
+        clockView.showLoading("正在返回设备设置");
         settingsConfirmation = SettingsConfirmation::kNone;
         invalidateView();
       } else if (touch.y >= 610 && touch.y <= 715 && touch.x >= 295 && touch.x <= 485) {
         if (settingsConfirmation == SettingsConfirmation::kRestart) {
+          clockView.showLoading("设备即将重新启动");
           delay(200);
           ESP.restart();
         } else {
-          M5.Display.waitDisplay();
+          clockView.showPoweredOff();
           delay(250);
           M5.Power.powerOff();
         }
@@ -429,16 +437,19 @@ void updateTouch() {
 
     const auto& settings = appState.settings();
     if (touch.y >= 115 && touch.y <= 205) {
+      clockView.showLoading("正在保存 Wi-Fi 省电设置");
       appState.updateSettings(settings.wifiPowerSave == 0,
                               settings.webManagementEnabled != 0,
                               settings.autoLockMinutes);
       invalidateView();
     } else if (touch.y >= 220 && touch.y <= 310) {
+      clockView.showLoading("正在切换 Web 管理");
       appState.updateSettings(settings.wifiPowerSave != 0,
                               settings.webManagementEnabled == 0,
                               settings.autoLockMinutes);
       invalidateView();
     } else if (touch.y >= 325 && touch.y <= 415) {
+      clockView.showLoading("正在保存自动锁屏设置");
       constexpr uint16_t intervals[] = {0, 5, 15, 30, 60, 120};
       size_t next = 0;
       for (size_t i = 0; i < sizeof(intervals) / sizeof(intervals[0]); ++i) {
@@ -451,14 +462,19 @@ void updateTouch() {
                               settings.webManagementEnabled != 0, intervals[next]);
       invalidateView();
     } else if (touch.y >= 440 && touch.y <= 545) {
+      clockView.showLoading(wifiPortal.provisioning() ? "正在关闭配网热点"
+                                                      : "正在开启配网热点");
       wifiPortal.toggleProvisioning();
       invalidateView();
     } else if (touch.y >= 575 && touch.y <= 663) {
+      clockView.showLoading("正在进入锁屏");
       enterLockScreen();
     } else if (touch.y >= 695 && touch.y <= 783 && touch.x >= 45 && touch.x <= 255) {
+      clockView.showLoading("正在打开重启确认");
       settingsConfirmation = SettingsConfirmation::kRestart;
       invalidateView();
     } else if (touch.y >= 695 && touch.y <= 783 && touch.x >= 285 && touch.x <= 495) {
+      clockView.showLoading("正在打开关机确认");
       settingsConfirmation = SettingsConfirmation::kPowerOff;
       invalidateView();
     }
@@ -466,6 +482,7 @@ void updateTouch() {
   }
 
   if (portraitPage == PortraitPage::kLiteracy) {
+    clockView.showLoading("正在切换字卡");
     if (touch.x < M5.Display.width() / 2) {
       literacyIndex = literacyIndex == 0 ? paperdesk::kLiteracyEntryCount - 1 : literacyIndex - 1;
     } else {
@@ -479,9 +496,11 @@ void updateTouch() {
 
   if (todoClearConfirmation) {
     if (touch.y >= 610 && touch.y <= 715 && touch.x >= 55 && touch.x <= 245) {
+      clockView.showLoading("正在返回 Todo");
       todoClearConfirmation = false;
       invalidateView();
     } else if (touch.y >= 610 && touch.y <= 715 && touch.x >= 295 && touch.x <= 485) {
+      clockView.showLoading("正在清空全部待办");
       appState.clearTodos();
       todoClearConfirmation = false;
       pendingTodoId = 0;
@@ -493,9 +512,11 @@ void updateTouch() {
 
   if (pendingTodoId != 0) {
     if (touch.y >= 635 && touch.y <= 727 && touch.x >= 75 && touch.x <= 245) {
+      clockView.showLoading("正在返回 Todo");
       pendingTodoId = 0;
       invalidateView();
     } else if (touch.y >= 635 && touch.y <= 727 && touch.x >= 295 && touch.x <= 465) {
+      clockView.showLoading("正在保存待办状态");
       const int index = appState.findTodo(pendingTodoId);
       if (index >= 0) {
         appState.setTodoCompleted(pendingTodoId, !appState.todo(index).completed);
@@ -507,6 +528,7 @@ void updateTouch() {
   }
 
   if (touch.y >= 28 && touch.y <= 100 && touch.x >= 220 && touch.x <= 390) {
+    clockView.showLoading("正在更新待办筛选");
     todoHideCompleted = !todoHideCompleted;
     todoPage = 0;
     invalidateView();
@@ -514,6 +536,7 @@ void updateTouch() {
   }
   if (touch.y >= 28 && touch.y <= 100 && touch.x >= 405 && touch.x <= 520) {
     if (appState.todoCount() > 0) {
+      clockView.showLoading("正在打开清空确认");
       todoClearConfirmation = true;
       invalidateView();
     }
@@ -525,6 +548,7 @@ void updateTouch() {
     const size_t position = todoPage * kTodosPerPage + row;
     const int index = appState.todoIndexForVisiblePosition(position, todoHideCompleted);
     if (index >= 0 && row < kTodosPerPage) {
+      clockView.showLoading("正在打开待办确认");
       pendingTodoId = appState.todo(static_cast<size_t>(index)).id;
       clockView.showTodoConfirmation(appState.todo(static_cast<size_t>(index)));
       viewDirty = false;
@@ -567,7 +591,7 @@ void loop() {
   M5.update();
   wifiPortal.update();
   if (wifiPortal.consumePowerOffRequest()) {
-    M5.Display.waitDisplay();
+    clockView.showPoweredOff();
     delay(250);
     M5.Power.powerOff();
     return;
