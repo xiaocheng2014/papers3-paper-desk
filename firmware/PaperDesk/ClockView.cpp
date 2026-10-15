@@ -591,9 +591,15 @@ void ClockView::showDeviceSettings(const AppState::DeviceSettings& settings, con
   M5.Display.drawRoundRect(45, 440, 450, 105, 16, TFT_BLACK);
   M5.Display.drawString(provisioning ? "配网热点已开启" : "开启 Wi-Fi 配网", 270, 452);
   M5.Display.setFont(&fonts::efontCN_16);
-  const String provisioningDetail = provisioning
-                                        ? apSsid + " · 密码 " + kAdminPassword
-                                        : String("已保存 ") + savedNetworkCount + " 个网络";
+  String provisioningDetail;
+  if (provisioning) {
+    provisioningDetail = apSsid + " · 密码 " + kAdminPassword;
+  } else if (wifiConnected) {
+    provisioningDetail = String("当前：") + wifiSsid + " · 已保存 " +
+                         savedNetworkCount + " 个";
+  } else {
+    provisioningDetail = String("当前离线 · 已保存 ") + savedNetworkCount + " 个";
+  }
   M5.Display.drawString(provisioningDetail, 270, 500);
 
   M5.Display.setTextDatum(textdatum_t::middle_center);
